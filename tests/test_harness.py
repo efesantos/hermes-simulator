@@ -198,12 +198,12 @@ def _seed_state_db(path: Path, rows: list[dict]) -> None:
     conn.close()
 
 
-def _session_with_tools(n: int) -> SessionRow:
-    return SessionRow("m", 100, 10, 0, 0, 0, 1, n, 0.0, 0.0, "", "")
+def _session(tool_count: int, input_tokens: int) -> SessionRow:
+    return SessionRow("m", input_tokens, 10, 0, 0, 0, 1, tool_count, 0.0, 0.0, "", "")
 
 
-def _harness_with_tool_sequence(tmp_path, monkeypatch, tool_counts):
-    """A Harness whose successive runs report the given tool_call_counts."""
+def _harness_with_run_sequence(tmp_path, monkeypatch, runs):
+    """A Harness whose successive runs report the given (tool_count, input) pairs."""
     h = Harness(tmp_path / "home", _model())
     calls = {"n": 0}
 
@@ -212,36 +212,50 @@ def _harness_with_tool_sequence(tmp_path, monkeypatch, tool_counts):
         return HarnessResult("ok", "", 0)
 
     def fake_latest():
-        i = min(calls["n"] - 1, len(tool_counts) - 1)
-        return _session_with_tools(tool_counts[i])
+        i = min(calls["n"] - 1, len(runs) - 1)
+        return _session(*runs[i])
 
     monkeypatch.setattr(h, "_run_once", fake_run_once)
     monkeypatch.setattr(h, "latest_session", fake_latest)
     return h, calls
 
 
-def test_expect_tools_retries_until_a_tool_is_called(tmp_path, monkeypatch):
-    # Tool-starved first run (cold-start race), tools loaded on the second.
-    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [0, 1])
+# Low input => MCP schemas not loaded (starvation). High => tools were present.
+_STARVED = (0, 8_800)
+_TOOLS_UNUSED = (0, 30_000)
+_TOOL_CALLED = (1, 25_000)
+
+
+def test_expect_tools_retries_past_starvation(tmp_path, monkeypatch):
+    # Starved first run (cold-start race), tools loaded + called on the second.
+    h, calls = _harness_with_run_sequence(tmp_path, monkeypatch, [_STARVED, _TOOL_CALLED])
     h.run_oneshot("x", expect_tools=True, tool_retries=3)
-    assert calls["n"] == 2  # retried once, then a tool call stopped it
+    assert calls["n"] == 2  # retried once past starvation, then a tool call stopped it
 
 
 def test_expect_tools_gives_up_after_retries(tmp_path, monkeypatch):
-    # A genuine non-caller (e.g. format-incompatible model) never reaches a tool.
-    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [0])
+    # Persistent starvation: retry budget exhausted.
+    h, calls = _harness_with_run_sequence(tmp_path, monkeypatch, [_STARVED])
     h.run_oneshot("x", expect_tools=True, tool_retries=3)
-    assert calls["n"] == 4  # 1 initial + 3 retries, then gives up (still 0)
+    assert calls["n"] == 4  # 1 initial + 3 retries
+
+
+def test_expect_tools_does_not_retry_when_tools_loaded_but_unused(tmp_path, monkeypatch):
+    # The key refinement: high input + 0 tool calls = the model chose not to call.
+    # That's a real result (e.g. a weak agentic model), not infra — do not retry.
+    h, calls = _harness_with_run_sequence(tmp_path, monkeypatch, [_TOOLS_UNUSED])
+    h.run_oneshot("x", expect_tools=True, tool_retries=3)
+    assert calls["n"] == 1
 
 
 def test_expect_tools_no_retry_when_first_run_calls_a_tool(tmp_path, monkeypatch):
-    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [2])
+    h, calls = _harness_with_run_sequence(tmp_path, monkeypatch, [_TOOL_CALLED])
     h.run_oneshot("x", expect_tools=True)
     assert calls["n"] == 1
 
 
 def test_no_retry_without_expect_tools(tmp_path, monkeypatch):
-    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [0, 0, 0])
+    h, calls = _harness_with_run_sequence(tmp_path, monkeypatch, [_STARVED, _STARVED])
     h.run_oneshot("x")  # expect_tools defaults False
     assert calls["n"] == 1
 

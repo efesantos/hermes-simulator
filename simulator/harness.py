@@ -32,6 +32,13 @@ from .config import CandidateModel, Hosting
 # Default hermes executable. Overridable per-Harness for tests / alternate installs.
 DEFAULT_HERMES_BIN = "hermes"
 
+# If a run made zero tool calls but its input is at least this large, the
+# mock-world tool schemas (~10-12K tokens) WERE loaded and the model simply chose
+# not to call one — retrying won't help. Below it, the MCP servers hadn't booted
+# (cold-start starvation) and a retry can recover. Sits in the clear gap between a
+# model's no-tools base (~8-12K) and its with-tools input (~20K+).
+TOOLS_LOADED_MIN_INPUT = 15_000
+
 # Hermes refuses a model whose usable context is under the floor, in a few
 # phrasings. All cite the token threshold (a number), which is what keeps these
 # from matching incidental agent prose that merely mentions context windows:
@@ -262,6 +269,12 @@ class Harness:
             # None session => can't verify (e.g. fake binary / no state.db); don't
             # spin. A real tool-using run has tool_call_count >= 1.
             if session is None or session.tool_call_count >= 1:
+                return result
+            # Zero tool calls: retry ONLY if the schemas weren't loaded (low input
+            # => MCP cold-start starvation). High input means the tools were
+            # present and the model chose not to use them — a real result, not
+            # infra; retrying would just burn runs.
+            if session.input_tokens >= TOOLS_LOADED_MIN_INPUT:
                 return result
             result = self._run_once(prompt, extra_env)
         return result
