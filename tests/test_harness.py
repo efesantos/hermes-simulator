@@ -16,7 +16,7 @@ from simulator.config import (
     RunConfig,
     default_run_config,
 )
-from simulator.harness import ContextWindowError, Harness
+from simulator.harness import ContextWindowError, Harness, HarnessResult, SessionRow
 
 
 def _model(model_id: str = "qwen3.6:latest", ctx: int = 65_536) -> CandidateModel:
@@ -196,6 +196,54 @@ def _seed_state_db(path: Path, rows: list[dict]) -> None:
         conn.execute(f"INSERT INTO sessions ({cols}) VALUES ({ph})", list(r.values()))
     conn.commit()
     conn.close()
+
+
+def _session_with_tools(n: int) -> SessionRow:
+    return SessionRow("m", 100, 10, 0, 0, 0, 1, n, 0.0, 0.0, "", "")
+
+
+def _harness_with_tool_sequence(tmp_path, monkeypatch, tool_counts):
+    """A Harness whose successive runs report the given tool_call_counts."""
+    h = Harness(tmp_path / "home", _model())
+    calls = {"n": 0}
+
+    def fake_run_once(prompt, extra_env):
+        calls["n"] += 1
+        return HarnessResult("ok", "", 0)
+
+    def fake_latest():
+        i = min(calls["n"] - 1, len(tool_counts) - 1)
+        return _session_with_tools(tool_counts[i])
+
+    monkeypatch.setattr(h, "_run_once", fake_run_once)
+    monkeypatch.setattr(h, "latest_session", fake_latest)
+    return h, calls
+
+
+def test_expect_tools_retries_until_a_tool_is_called(tmp_path, monkeypatch):
+    # Tool-starved first run (cold-start race), tools loaded on the second.
+    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [0, 1])
+    h.run_oneshot("x", expect_tools=True, tool_retries=3)
+    assert calls["n"] == 2  # retried once, then a tool call stopped it
+
+
+def test_expect_tools_gives_up_after_retries(tmp_path, monkeypatch):
+    # A genuine non-caller (e.g. format-incompatible model) never reaches a tool.
+    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [0])
+    h.run_oneshot("x", expect_tools=True, tool_retries=3)
+    assert calls["n"] == 4  # 1 initial + 3 retries, then gives up (still 0)
+
+
+def test_expect_tools_no_retry_when_first_run_calls_a_tool(tmp_path, monkeypatch):
+    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [2])
+    h.run_oneshot("x", expect_tools=True)
+    assert calls["n"] == 1
+
+
+def test_no_retry_without_expect_tools(tmp_path, monkeypatch):
+    h, calls = _harness_with_tool_sequence(tmp_path, monkeypatch, [0, 0, 0])
+    h.run_oneshot("x")  # expect_tools defaults False
+    assert calls["n"] == 1
 
 
 def test_warm_is_noop_for_non_local_model(tmp_path: Path):

@@ -229,17 +229,46 @@ class Harness:
     # --- running -------------------------------------------------------------
 
     def run_oneshot(
-        self, prompt: str, *, extra_env: dict[str, str] | None = None
+        self,
+        prompt: str,
+        *,
+        extra_env: dict[str, str] | None = None,
+        expect_tools: bool = False,
+        tool_retries: int = 3,
     ) -> HarnessResult:
         """Run a single headless prompt; return stdout/stderr/exit code.
 
         ``extra_env`` is added to the subprocess environment (and so to any MCP
         server Hermes launches) — used to pass the simulated clock per day.
 
+        When ``expect_tools`` is set, the run is retried (up to ``tool_retries``
+        times) if it completed without calling **any** tool. The mock-world MCP
+        servers are spawned fresh per run and, for fast-loading models, the agent
+        can start before they finish booting — running tool-less. Retrying lets a
+        genuinely capable model get its tools on a later attempt, while a model
+        that truly never emits tool calls (e.g. a format-incompatible one) still
+        ends with zero and fails correctly. Retrying is safe: a tool-less run made
+        no world changes.
+
         Raises :class:`ContextWindowError` when Hermes refuses the model for being
         below the context floor — an eligibility failure the runner records and
         drops, rather than a crash to propagate.
         """
+        result = self._run_once(prompt, extra_env)
+        if not expect_tools:
+            return result
+        for _ in range(tool_retries):
+            session = self.latest_session()
+            # None session => can't verify (e.g. fake binary / no state.db); don't
+            # spin. A real tool-using run has tool_call_count >= 1.
+            if session is None or session.tool_call_count >= 1:
+                return result
+            result = self._run_once(prompt, extra_env)
+        return result
+
+    def _run_once(
+        self, prompt: str, extra_env: dict[str, str] | None
+    ) -> HarnessResult:
         completed = subprocess.run(
             [self.hermes_bin, "-z", prompt],
             env=self._env(extra_env),

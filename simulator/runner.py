@@ -285,7 +285,9 @@ class Runner:
         world_db = home_dir / "world.db"
         WorldState.create(world_db).close()  # empty world; listing is still a tool call
         harness = self._prepared_harness(model, home_dir / "home", world_db)
-        result = harness.run_oneshot(SMOKE_PROMPT)
+        # expect_tools: retry past the MCP cold-start race so a genuine tool-caller
+        # isn't failed for tool-less infra runs; a true non-caller still ends at 0.
+        result = harness.run_oneshot(SMOKE_PROMPT, expect_tools=True)
         return evaluate_format_smoke(result, harness.latest_session())
 
     def _run_stage1_task(
@@ -329,7 +331,7 @@ class Runner:
 
         harness = self._prepared_harness(model, task_dir / "home", world_db)
         try:
-            result = harness.run_oneshot(task.prompt)
+            result = harness.run_oneshot(task.prompt, expect_tools=True)
         except ContextWindowError as exc:  # shouldn't reach here post-gate, but be safe
             return False, f"context error: {exc}", "", -1
 
@@ -405,7 +407,8 @@ class Runner:
 
         # 3. Agent acts, with the day's simulated clock visible to the servers.
         result = harness.run_oneshot(
-            day.user_prompt, extra_env={"HERMES_SIM_NOW": day.clock()}
+            day.user_prompt, extra_env={"HERMES_SIM_NOW": day.clock()},
+            expect_tools=True,
         )
         session = harness.latest_session()
 
