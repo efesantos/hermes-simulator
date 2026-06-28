@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Simulator run artifacts (trajectories, per-track homes, reports)
+results/
+
+# Unrelated vendored tooling checked out in this working tree
+skills/

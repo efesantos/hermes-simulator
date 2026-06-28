@@ -1,0 +1,30 @@
+[project]
+name = "hermes-simulator"
+version = "0.1.0"
+description = "Benchmark harness that ranks open-weight models inside the Nous hermes-agent harness for the personal-assistant business"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["simulator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Live runs against the real hermes binary / Ollama are slow and environment-dependent.
+# They are marked `live` and skipped by default; run with `-m live` to include them.
+markers = [
+    "live: tests that invoke the real hermes binary or Ollama (slow, environment-dependent)",
+]
+addopts = "-m 'not live'"
