@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .config import CandidateModel, RunConfig
+from .grading.deterministic import grade_task
 from .harness import ContextWindowError, Harness, HarnessResult, SessionRow
 from .scenarios.types import Counterparty, DayPlan, Persona, Stage1Task
 from .world.registration import register_world
@@ -50,9 +51,8 @@ def _default_harness_factory(home: Path, model: CandidateModel) -> Harness:
     return Harness(home, model)
 
 
-def _ungraded(_world: WorldState, _expected: dict) -> tuple[bool, str]:
-    """Placeholder Stage-1 grader: passes everything, flags that no grader ran."""
-    return True, "no grader wired (U7 supplies the deterministic grader)"
+# The default Stage-1 grader is the deterministic state-diff engine (U7).
+_default_stage1_grader = grade_task
 
 
 # --- Stage-1 gate evaluation (pure; unit-tested directly) --------------------
@@ -177,7 +177,7 @@ class Runner:
         results_root: str | Path = "results",
         harness_factory: HarnessFactory = _default_harness_factory,
         python_exe: str | None = None,
-        stage1_grader: Stage1Grader = _ungraded,
+        stage1_grader: Stage1Grader = _default_stage1_grader,
         counterparty: Optional[Counterparty] = None,
         stage1_pass_threshold: float = 0.6,
     ) -> None:
