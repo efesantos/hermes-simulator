@@ -30,8 +30,18 @@ from .config import CandidateModel
 # Default hermes executable. Overridable per-Harness for tests / alternate installs.
 DEFAULT_HERMES_BIN = "hermes"
 
-# Hermes prints this (substring) when a model's context window is under the floor.
-_CONTEXT_ERROR_RE = re.compile(r"context window .*below the minimum", re.IGNORECASE)
+# Hermes refuses a model whose usable context is under the floor, in a few
+# phrasings. All cite the token threshold (a number), which is what keeps these
+# from matching incidental agent prose that merely mentions context windows:
+#   "...context window below the minimum 64,000 required."
+#   "Ollama loaded `m` with only 40,960 tokens of runtime context, but Hermes
+#    needs at least 64,000 tokens..."
+_CONTEXT_ERROR_RE = re.compile(
+    r"context window .*below the minimum [\d,]+"
+    r"|only [\d,]+ tokens of runtime context"
+    r"|needs at least [\d,]+ tokens",
+    re.IGNORECASE,
+)
 
 
 class HarnessError(Exception):
@@ -211,11 +221,12 @@ class Harness:
             stderr=completed.stderr,
             exit_code=completed.returncode,
         )
-        # Treat as a context-floor refusal only when Hermes actually failed: the
-        # phrase on stderr, or on stdout with a non-zero exit. This avoids
-        # misclassifying a *successful* run whose reply merely mentions the phrase.
-        if _CONTEXT_ERROR_RE.search(result.stderr) or (
-            not result.ok and _CONTEXT_ERROR_RE.search(result.stdout)
+        # Hermes emits the runtime-context refusal on stdout with exit 0, so match
+        # either stream regardless of exit. Safe from false positives because the
+        # regex requires the cited token threshold (a number), which a successful
+        # agent reply mentioning context windows in prose won't contain.
+        if _CONTEXT_ERROR_RE.search(result.stdout) or _CONTEXT_ERROR_RE.search(
+            result.stderr
         ):
             raise ContextWindowError(
                 f"{self.model.id}: context window {self.model.context_length} "

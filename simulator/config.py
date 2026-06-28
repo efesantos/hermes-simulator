@@ -184,6 +184,14 @@ DEFAULT_CANDIDATES: tuple[CandidateModel, ...] = (
         context_length=65_536,
         label="Gemma3 12B (local)",
     ),
+    # Newer Gemma — included to learn whether the family fixed the tool-call-format
+    # problem that dropped gemma3 at Stage 1.
+    CandidateModel(
+        id="gemma4:latest",
+        hosting_profile=LOCAL_OLLAMA,
+        context_length=65_536,
+        label="Gemma4 (local)",
+    ),
     # Below the 64K floor — should be dropped at the eligibility gate.
     CandidateModel(
         id="qwen3:8b",

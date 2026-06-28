@@ -144,6 +144,22 @@ def test_context_window_error_is_typed_and_catchable(
         h.run_oneshot("anything")
 
 
+def test_runtime_context_refusal_is_detected(tmp_path: Path, fake_hermes: str, monkeypatch):
+    # Regression: Hermes refuses an under-context model on STDOUT with exit 0 using
+    # a phrasing the original regex missed ("...only N tokens of runtime context,
+    # but Hermes needs at least 64,000 tokens..."). It must still be classified as
+    # a context-floor failure, not a format failure.
+    h = Harness(tmp_path / "home", _model("qwen3:32b", 65_536), hermes_bin=fake_hermes)
+    h.setup()
+    monkeypatch.setenv(
+        "FAKE_STDOUT",
+        "Ollama loaded qwen3:32b with only 40,960 tokens of runtime context, "
+        "but Hermes needs at least 64,000 tokens for reliability.",
+    )
+    with pytest.raises(ContextWindowError):
+        h.run_oneshot("anything")  # exit 0, message on stdout
+
+
 def test_successful_run_mentioning_phrase_does_not_raise(
     tmp_path: Path, fake_hermes: str, monkeypatch
 ):
