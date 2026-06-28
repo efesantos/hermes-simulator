@@ -48,6 +48,30 @@ def test_not_after_day_exempts_days_before_correction():
     assert score_not_after_day(texts, learned_on_day=2, forbidden_keyword="thursday")[0]
 
 
+def test_not_after_day_allows_history_when_corrected_present():
+    # Regression: stating the new day while referencing the old as history passes.
+    texts = {3: "Soccer moved from Thursday to Wednesday."}
+    passed, _ = score_not_after_day(
+        texts, learned_on_day=2, forbidden_keyword="thursday", corrected_keyword="wednesday"
+    )
+    assert passed
+    # ...but Thursday alone (no Wednesday) is still a repeat.
+    texts2 = {3: "See you Thursday for soccer."}
+    assert not score_not_after_day(
+        texts2, learned_on_day=2, forbidden_keyword="thursday", corrected_keyword="wednesday"
+    )[0]
+
+
+def test_no_event_before_exempts_seeded_exogenous_events():
+    # Regression: a seeded pre-9am event must not fail a "no early bookings" signal.
+    snap = {"events": [{"title": "Standing gym block", "start": "2026-07-02T07:00:00",
+                        "end": "2026-07-02T08:00:00"}]}
+    # Not exempt -> flagged.
+    assert not score_no_event_before(snap, "09:00")[0]
+    # Exempt (it was exogenous, not agent-created) -> passes.
+    assert score_no_event_before(snap, "09:00", exempt_starts=frozenset({"2026-07-02T07:00:00"}))[0]
+
+
 # --- AE3: improver scores higher than repeater -------------------------------
 
 

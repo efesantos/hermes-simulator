@@ -211,8 +211,11 @@ class Harness:
             stderr=completed.stderr,
             exit_code=completed.returncode,
         )
-        if _CONTEXT_ERROR_RE.search(result.stdout) or _CONTEXT_ERROR_RE.search(
-            result.stderr
+        # Treat as a context-floor refusal only when Hermes actually failed: the
+        # phrase on stderr, or on stdout with a non-zero exit. This avoids
+        # misclassifying a *successful* run whose reply merely mentions the phrase.
+        if _CONTEXT_ERROR_RE.search(result.stderr) or (
+            not result.ok and _CONTEXT_ERROR_RE.search(result.stdout)
         ):
             raise ContextWindowError(
                 f"{self.model.id}: context window {self.model.context_length} "

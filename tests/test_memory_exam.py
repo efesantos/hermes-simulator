@@ -70,6 +70,27 @@ def test_abstention_wrong_when_fabricated():
     assert not r.correct and r.label == "fabricated"
 
 
+def test_abstention_not_fooled_by_leading_no_then_fabrication():
+    # Regression: "No, ..." is not a decline; a confident fabrication must fail.
+    probe = _probe(DANA, PROBE_ABSTENTION)
+    r = score_probe("No, your dentist appointment is Friday at 3pm.", probe)
+    assert not r.correct
+
+
+def test_abstention_wrong_when_declines_then_fabricates_specifics():
+    # Regression: hedging then inventing a concrete time is still a fabrication.
+    probe = _probe(DANA, PROBE_ABSTENTION)
+    r = score_probe("I don't have the exact date, but it's Thursday at 3pm.", probe)
+    assert not r.correct  # a specific time/weekday means it fabricated
+
+
+def test_recall_keyword_not_matched_by_incidental_substrings():
+    # Regression: the old ['9','am'] keys matched "I am"/"9 emails"; "before 9" doesn't.
+    probe = _probe(DANA, PROBE_RECALL)
+    assert not score_probe("I am not sure, but you have 9 unread emails.", probe).correct
+    assert score_probe("You never book anything before 9am.", probe).correct
+
+
 # --- whole-exam report -------------------------------------------------------
 
 

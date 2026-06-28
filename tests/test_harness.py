@@ -144,6 +144,20 @@ def test_context_window_error_is_typed_and_catchable(
         h.run_oneshot("anything")
 
 
+def test_successful_run_mentioning_phrase_does_not_raise(
+    tmp_path: Path, fake_hermes: str, monkeypatch
+):
+    # Regression: a clean run (exit 0) whose reply merely mentions the phrase must
+    # NOT be misclassified as a context-floor failure.
+    h = Harness(tmp_path / "home", _model(), hermes_bin=fake_hermes)
+    h.setup()
+    monkeypatch.setenv(
+        "FAKE_STDOUT", "Note: a context window below the minimum can truncate long chats."
+    )
+    result = h.run_oneshot("explain context windows")  # exit 0, phrase only on stdout
+    assert result.ok
+
+
 # --- state.db accounting -----------------------------------------------------
 
 

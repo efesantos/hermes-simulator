@@ -56,33 +56,67 @@ def _parse_time(hhmm: str) -> time:
     return time(int(h), int(m))
 
 
-def score_no_event_before(snapshot: dict[str, list[dict]], hhmm: str) -> tuple[bool, str]:
-    """Pass iff no calendar event starts before ``hhmm`` (time-of-day)."""
+def score_no_event_before(
+    snapshot: dict[str, list[dict]],
+    hhmm: str,
+    *,
+    exempt_starts: frozenset[str] = frozenset(),
+) -> tuple[bool, str]:
+    """Pass iff no *agent-created* calendar event starts before ``hhmm``.
+
+    ``exempt_starts`` lists the start datetimes of exogenous events (seeded or
+    inbound) — those were not scheduled by the agent, so they don't count against
+    a "never books before 9am" preference even if they fall early.
+    """
     floor = _parse_time(hhmm)
     early = [
         e for e in snapshot.get("events", [])
-        if datetime.fromisoformat(e["start"]).time() < floor
+        if e.get("start") not in exempt_starts
+        and datetime.fromisoformat(e["start"]).time() < floor
     ]
     if early:
         titles = [e.get("title") for e in early]
         return False, f"events scheduled before {hhmm}: {titles}"
-    return True, f"no events before {hhmm}"
+    return True, f"no agent-created events before {hhmm}"
 
 
 def score_not_after_day(
-    agent_text_by_day: dict[int, str], learned_on_day: int, forbidden_keyword: str
+    agent_text_by_day: dict[int, str],
+    learned_on_day: int,
+    forbidden_keyword: str,
+    *,
+    corrected_keyword: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """Pass iff the stale keyword does not appear in the agent's output after the
-    day it was corrected. Days at or before ``learned_on_day`` are exempt (the
-    agent had not yet been told)."""
-    needle = forbidden_keyword.lower()
-    repeats = [
-        day for day, text in sorted(agent_text_by_day.items())
-        if day > learned_on_day and needle in (text or "").lower()
-    ]
+    """Pass iff the agent stops *relying on* the stale keyword after correction.
+
+    A day after ``learned_on_day`` counts as a repeat only when the forbidden
+    keyword appears AND (when ``corrected_keyword`` is given) the corrected one
+    does not — so "moved from Thursday to Wednesday" is fine (it states the new
+    fact and merely references the old as history), while "see you Thursday" is a
+    repeat. Days at or before ``learned_on_day`` are exempt.
+    """
+    forbidden = forbidden_keyword.lower()
+    corrected = corrected_keyword.lower() if corrected_keyword else None
+    repeats = []
+    for day, text in sorted(agent_text_by_day.items()):
+        if day <= learned_on_day:
+            continue
+        low = (text or "").lower()
+        if forbidden in low and (corrected is None or corrected not in low):
+            repeats.append(day)
     if repeats:
-        return False, f"still used {forbidden_keyword!r} on day(s) {repeats} after correction"
+        return False, f"still relied on {forbidden_keyword!r} on day(s) {repeats} after correction"
     return True, f"dropped {forbidden_keyword!r} after day {learned_on_day}"
+
+
+def exogenous_event_starts(persona: Persona) -> frozenset[str]:
+    """Start datetimes of every non-agent event (seeded + inbound), for exemption."""
+    starts = {e.get("start") for e in persona.world_seed.get("events", []) if e.get("start")}
+    for day in persona.days:
+        for ev in day.inbound:
+            if ev.kind == "event" and ev.data.get("start"):
+                starts.add(ev.data["start"])
+    return frozenset(starts)
 
 
 def grade_behavioral(
@@ -91,14 +125,18 @@ def grade_behavioral(
     agent_text_by_day: dict[int, str],
 ) -> BehavioralReport:
     """Evaluate every behavioral signal the persona declares."""
+    exempt = exogenous_event_starts(persona)
     results: list[BehavioralResult] = []
     for signal in behavioral_signals(persona):
         kind = signal["kind"]
         if kind == SIGNAL_NO_EVENT_BEFORE:
-            passed, detail = score_no_event_before(snapshot, signal["time"])
+            passed, detail = score_no_event_before(
+                snapshot, signal["time"], exempt_starts=exempt
+            )
         elif kind == SIGNAL_NOT_AFTER_DAY:
             passed, detail = score_not_after_day(
-                agent_text_by_day, signal["learned_on_day"], signal["forbidden_keyword"]
+                agent_text_by_day, signal["learned_on_day"], signal["forbidden_keyword"],
+                corrected_keyword=signal.get("corrected_keyword"),
             )
         else:  # pragma: no cover - schema validation forbids this
             raise ValueError(f"unknown behavioral signal kind {kind!r}")

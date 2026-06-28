@@ -21,7 +21,14 @@ from .config import RunConfig
 from .grading.judge import Judge
 from .grading.memory_exam import administer_exam
 from .harness import Harness
-from .metrics import evaluate_track, rollup
+from .metrics import (
+    TrackEvaluation,
+    evaluate_track,
+    latency_seconds,
+    normalize_cost,
+    rollup,
+    tokens_to_complete,
+)
 from .report import Report, build_report, render_table
 from .runner import HarnessFactory, Runner, _default_harness_factory
 from .scenarios.types import Counterparty, Persona, Stage1Task
@@ -63,23 +70,37 @@ def run_full(
         model = model_by_id[track.model_id]
         completed = track.status == "completed"
 
-        memory_answers = None
-        if completed:
-            # The track's home still holds accrued memory + registered world.
-            exam_harness = harness_factory(Path(track.trajectory_dir) / "home", model)
-            memory_answers = administer_exam(exam_harness, persona)
+        # Per-track isolation: a failing exam/judge/evaluation for one track must
+        # not discard every other track's expensive Stage-2 work (mirrors the
+        # runner's own per-day guard). On failure, record a degraded evaluation.
+        try:
+            memory_answers = None
+            if completed:
+                # The track's home still holds accrued memory + registered world.
+                exam_harness = harness_factory(Path(track.trajectory_dir) / "home", model)
+                memory_answers = administer_exam(exam_harness, persona)
 
-        judge_mean = None
-        if judge is not None and track.days:
-            transcript = "\n\n".join(d.stdout for d in track.days)
-            verdict = judge.score(transcript, candidate_family=model.family_name)
-            judge_mean = verdict.mean / 5.0  # 1..5 -> 0..1
+            judge_mean = None
+            if judge is not None and track.days:
+                transcript = "\n\n".join(d.stdout for d in track.days)
+                verdict = judge.score(transcript, candidate_family=model.family_name)
+                judge_mean = verdict.mean / 5.0  # 1..5 -> 0..1
 
-        evaluations.append(evaluate_track(
-            persona, model, track_dir=track.trajectory_dir, sessions=track.sessions,
-            seed=track.seed, completed=completed, run_config=run_config,
-            memory_answers=memory_answers, judge_mean_0_1=judge_mean,
-        ))
+            evaluations.append(evaluate_track(
+                persona, model, track_dir=track.trajectory_dir, sessions=track.sessions,
+                seed=track.seed, completed=completed, run_config=run_config,
+                memory_answers=memory_answers, judge_mean_0_1=judge_mean,
+            ))
+        except Exception:
+            # Degraded: keep the track in the rollup as an incomplete failure
+            # rather than crashing the whole report.
+            evaluations.append(TrackEvaluation(
+                model_id=model.id, persona=persona.name, seed=track.seed,
+                completed=False, capability=0.0, memory=0.0,
+                tokens=tokens_to_complete(track.sessions),
+                cost_usd=normalize_cost(track.sessions, model, run_config),
+                latency_s=latency_seconds(track.sessions),
+            ))
 
     eliminated = {o.model_id: o.reason for o in matrix.stage1 if not o.survived}
     rollups = rollup(evaluations, run_config, eliminated=eliminated,

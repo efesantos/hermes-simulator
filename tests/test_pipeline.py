@@ -38,6 +38,29 @@ def test_run_full_drives_funnel_to_a_written_report(tmp_path, fake_hermes, monke
     assert "Composite" in rendered
 
 
+def test_run_full_survives_a_raising_judge(tmp_path, fake_hermes, monkeypatch):
+    # Regression: an exception in the per-track grading (here, the judge) must not
+    # abort the whole run — the track is folded in as a degraded evaluation.
+    from simulator.grading.judge import Judge, JudgeConfig
+
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    cfg = RunConfig(candidates=(_model("qwen3.6:latest"),), seeds=(0, 1), k=2)
+    factory = lambda home, model: Harness(home, model, hermes_bin=fake_hermes, timeout=60)
+
+    # A judge whose model returns unparseable output -> JudgeError inside the loop.
+    bad_judge = Judge(
+        JudgeConfig(model="j", family="anthropic", base_url="http://x/v1"),
+        chat_fn=lambda *a, **k: "not json at all",
+    )
+
+    report, _ = run_full(
+        cfg, [DANA], stage1_tasks=[], results_root=tmp_path,
+        harness_factory=factory, judge=bad_judge, run_id="badjudge",
+    )
+    # The run still produced a report with the model present (degraded tracks folded in).
+    assert report.ranked and report.ranked[0].model_id == "qwen3.6:latest"
+
+
 def test_family_name_inference():
     assert _model("qwen3.6:latest").family_name == "qwen"
     assert _model("gemma3:12b").family_name == "gemma"

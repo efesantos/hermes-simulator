@@ -18,6 +18,7 @@ without a live model. Administering the exam (asking the harness) is separate.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -29,13 +30,25 @@ from ..scenarios.personas.schema import (
 )
 from ..scenarios.types import Persona
 
-# Phrases that signal the agent is declining / saying no such thing exists.
+# Specific phrases that signal the agent is declining / saying no such thing
+# exists. Deliberately NOT generic fragments like "no, " or "i don't" — those
+# match confident fabrications ("No, your appointment is Friday at 3pm").
 _ABSTAIN_PHRASES = (
     "no such", "not aware", "no record", "no appointment", "nothing scheduled",
-    "don't have", "do not have", "don't see", "do not see", "couldn't find",
-    "could not find", "can't find", "cannot find", "isn't any", "aren't any",
-    "there is no", "there's no", "no dentist", "not scheduled", "no scheduled",
-    "i don't", "i do not", "none ", "no, ",
+    "don't have", "do not have", "doesn't have", "does not have", "don't see",
+    "do not see", "didn't see", "couldn't find", "could not find", "can't find",
+    "cannot find", "isn't any", "aren't any", "there is no", "there's no",
+    "no dentist", "not scheduled", "no upcoming", "not on your calendar",
+    "no event", "not sure", "don't know", "do not know", "no idea",
+)
+
+# A specific time / weekday / ISO date in an abstention answer signals the agent
+# fabricated concrete details for an event that does not exist.
+_SPECIFIC_RE = re.compile(
+    r"\b\d{1,2}(:\d{2})?\s*[ap]\.?m\.?\b"  # 3pm, 3:30 p.m.
+    r"|\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b",  # 2026-07-22
+    re.IGNORECASE,
 )
 
 
@@ -97,8 +110,10 @@ def score_probe(answer: str, probe: dict) -> ProbeResult:
         return ProbeResult(pid, kind, False, "missing", answer)
 
     if kind == PROBE_ABSTENTION:
+        # Correct iff the agent declines AND does not fabricate concrete details.
         declined = _any_present(answer, list(_ABSTAIN_PHRASES))
-        if declined:
+        fabricated = bool(_SPECIFIC_RE.search(answer))
+        if declined and not fabricated:
             return ProbeResult(pid, kind, True, "abstained", answer)
         return ProbeResult(pid, kind, False, "fabricated", answer)
 

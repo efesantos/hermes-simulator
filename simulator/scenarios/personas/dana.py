@@ -131,7 +131,9 @@ _ANSWER_KEY = {
             "id": "recall_no_early_meetings",
             "kind": "recall",
             "question": "What is my rule about early-morning appointments?",
-            "expected": ["9", "am"],  # "no appointments before 9am"
+            # Discriminating phrase, not single chars: "before 9" avoids matching
+            # incidental "am"/"9" in unrelated text (e.g. "I am", "9 emails").
+            "expected": ["before 9"],  # "no appointments before 9am"
         },
         {
             "id": "update_soccer_day",
@@ -160,6 +162,9 @@ _ANSWER_KEY = {
             "kind": "not_after_day",
             "learned_on_day": 2,
             "forbidden_keyword": "thursday",
+            # Referencing the old day as history is fine if the new day is stated;
+            # only an answer that says Thursday without Wednesday is a repeat.
+            "corrected_keyword": "wednesday",
             "context": "soccer",
             "description": "After day 2, stops treating Mia's soccer as Thursday.",
         },
