@@ -177,16 +177,23 @@ class Harness:
             "hooks_auto_accept": True,
         }
 
-    def _env(self) -> dict[str, str]:
+    def _env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         env = dict(os.environ)
         env["HERMES_HOME"] = str(self.home)
         env["HERMES_ACCEPT_HOOKS"] = "1"
+        if extra:
+            env.update(extra)
         return env
 
     # --- running -------------------------------------------------------------
 
-    def run_oneshot(self, prompt: str) -> HarnessResult:
+    def run_oneshot(
+        self, prompt: str, *, extra_env: dict[str, str] | None = None
+    ) -> HarnessResult:
         """Run a single headless prompt; return stdout/stderr/exit code.
+
+        ``extra_env`` is added to the subprocess environment (and so to any MCP
+        server Hermes launches) — used to pass the simulated clock per day.
 
         Raises :class:`ContextWindowError` when Hermes refuses the model for being
         below the context floor — an eligibility failure the runner records and
@@ -194,7 +201,7 @@ class Harness:
         """
         completed = subprocess.run(
             [self.hermes_bin, "-z", prompt],
-            env=self._env(),
+            env=self._env(extra_env),
             capture_output=True,
             text=True,
             timeout=self.timeout,

@@ -204,6 +204,19 @@ class WorldState:
             timestamp=timestamp, folder="sent", unread=False,
         )
 
+    def max_email_id(self) -> int:
+        """Highest email id, or 0 if empty — to detect mail created since a checkpoint."""
+        row = self.conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM emails").fetchone()
+        return int(row["m"])
+
+    def emails_since(self, email_id: int, *, folder: str = "sent") -> list[dict]:
+        """Emails in ``folder`` with id greater than ``email_id`` (oldest first)."""
+        rows = self.conn.execute(
+            "SELECT * FROM emails WHERE id > ? AND folder = ? ORDER BY id",
+            (email_id, folder),
+        )
+        return [dict(r) for r in rows]
+
     def mark_read(self, email_id: int) -> bool:
         cur = self.conn.execute("UPDATE emails SET unread = 0 WHERE id = ?", (email_id,))
         self.conn.commit()
