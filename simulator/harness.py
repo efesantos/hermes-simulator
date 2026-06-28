@@ -16,16 +16,18 @@ instead of seeing a raw crash.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
 import subprocess
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from .config import CandidateModel
+from .config import CandidateModel, Hosting
 
 # Default hermes executable. Overridable per-Harness for tests / alternate installs.
 DEFAULT_HERMES_BIN = "hermes"
@@ -158,6 +160,35 @@ class Harness:
         """
         self.home.mkdir(parents=True, exist_ok=True)
         self.config_path.write_text(yaml.safe_dump(self._config_dict(), sort_keys=False))
+
+    def warm(self, *, keep_alive: str = "10m", timeout: float = 300.0) -> bool:
+        """Preload a local model into Ollama so it's resident before a run.
+
+        Critical for correctness, not just speed: when Ollama cold-loads a large
+        model, that load races the MCP servers' startup and Hermes's tool
+        discovery sometimes fires first — the agent then runs with NO mock-world
+        tools and every tool-requiring task fails as an artifact. Warming the
+        model (at the forced context) removes the race. Best-effort and a no-op
+        for API-hosted models; returns True if the warm call succeeded.
+        """
+        if self.model.hosting != Hosting.LOCAL:
+            return False
+        endpoint = self.model.base_url.rstrip("/")
+        if endpoint.endswith("/v1"):
+            endpoint = endpoint[: -len("/v1")]
+        payload = {
+            "model": self.model.id, "prompt": "", "stream": False,
+            "keep_alive": keep_alive, "options": {"num_ctx": self.model.context_length},
+        }
+        req = urllib.request.Request(
+            f"{endpoint}/api/generate", data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout):
+                return True
+        except Exception:
+            return False  # best-effort; the run still proceeds
 
     def _config_dict(self) -> dict:
         """Minimal Hermes config pinning provider + model + forced context window.

@@ -198,6 +198,25 @@ def _seed_state_db(path: Path, rows: list[dict]) -> None:
     conn.close()
 
 
+def test_warm_is_noop_for_non_local_model(tmp_path: Path):
+    from simulator.config import Hosting, HostingProfile
+
+    api = HostingProfile("API", Hosting.API, "together", "https://api.together.xyz/v1")
+    h = Harness(tmp_path / "home", CandidateModel("m", api, 128_000))
+    assert h.warm() is False  # API models aren't warmed; never touches Ollama
+
+
+def test_runner_warm_defaults_off_with_custom_factory(tmp_path: Path):
+    # Custom factory (tests/fakes) -> warming auto-disabled so we never hit Ollama.
+    from simulator.config import RunConfig
+    from simulator.runner import Runner, _default_harness_factory
+
+    cfg = RunConfig(candidates=(_model(),), seeds=(0,), k=1)
+    assert Runner(cfg, harness_factory=lambda h, m: None).warm_models is False
+    assert Runner(cfg, harness_factory=_default_harness_factory).warm_models is True
+    assert Runner(cfg, warm_models=True, harness_factory=lambda h, m: None).warm_models is True
+
+
 def test_read_sessions_empty_when_no_db(tmp_path: Path):
     h = Harness(tmp_path / "home", _model())
     h.setup()

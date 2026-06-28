@@ -98,6 +98,33 @@ def test_stage1_passes_gates_and_grades_prefilter(tmp_path, fake_hermes, monkeyp
     assert {t.task_id for t in out.task_results} == {"t1", "t2"}
 
 
+def test_stage1_best_of_n_passes_a_flaky_task(tmp_path, fake_hermes, monkeypatch):
+    # A capable-but-variable model: the grader fails attempt 1, passes attempt 2.
+    # Best-of-2 must count the task as passed (Stage 1 gauges capability ceiling).
+    monkeypatch.setenv("FAKE_STDOUT", "DONE")
+    calls = {"n": 0}
+
+    def flaky_grader(world, expected):
+        calls["n"] += 1
+        return (calls["n"] >= 2, "ok" if calls["n"] >= 2 else "missed")
+
+    runner = Runner(
+        RunConfig(candidates=(_model(),), seeds=(0,), k=1),
+        harness_factory=_factory(fake_hermes),
+        stage1_grader=flaky_grader,
+        stage1_attempts=2,
+    )
+    out = runner.run_stage1(_model(), [Stage1Task(id="flaky", prompt="x", expected_state={})],
+                            tmp_path / "run")
+    assert out.task_results[0].passed  # passed on the 2nd attempt
+    assert out.survived  # 100% pass rate with best-of-2
+
+
+def test_stage1_attempts_must_be_positive():
+    with pytest.raises(ValueError):
+        Runner(RunConfig(candidates=(_model(),), seeds=(0,), k=1), stage1_attempts=0)
+
+
 # --- Stage 2 day loop --------------------------------------------------------
 
 

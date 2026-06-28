@@ -180,14 +180,31 @@ class Runner:
         stage1_grader: Stage1Grader = _default_stage1_grader,
         counterparty: Optional[Counterparty] = None,
         stage1_pass_threshold: float = 0.6,
+        stage1_attempts: int = 1,
+        warm_models: Optional[bool] = None,
     ) -> None:
         self.cfg = run_config
         self.results_root = Path(results_root)
         self.harness_factory = harness_factory
         self.python_exe = python_exe or sys.executable
+        # Warm models before each run (prevents the MCP cold-start race). Default:
+        # on for real runs, off when a custom factory is injected (tests/fakes,
+        # which don't talk to a real Ollama).
+        self.warm_models = (
+            warm_models if warm_models is not None
+            else harness_factory is _default_harness_factory
+        )
         self.stage1_grader = stage1_grader
         self.counterparty = counterparty
         self.stage1_pass_threshold = stage1_pass_threshold
+        # Best-of-N per pre-filter task: a task counts as passed if the model
+        # succeeds in ANY attempt. Stage 1 gauges capability ("can it do this at
+        # all?"); single-shot grading wrongly drops capable-but-high-variance
+        # models (e.g. temperature-1.0 models). Consistency is measured properly
+        # in Stage 2 via pass^k, not here.
+        if stage1_attempts < 1:
+            raise ValueError("stage1_attempts must be >= 1")
+        self.stage1_attempts = stage1_attempts
 
     # --- top level -----------------------------------------------------------
 
@@ -274,7 +291,37 @@ class Runner:
     def _run_stage1_task(
         self, model: CandidateModel, task: Stage1Task, stage_dir: Path
     ) -> Stage1TaskResult:
-        task_dir = stage_dir / "tasks" / _safe(task.id)
+        # Best-of-N: re-run the task in a fresh world/home up to stage1_attempts
+        # times, passing on the first success.
+        attempts: list[dict] = []
+        for attempt in range(1, self.stage1_attempts + 1):
+            passed, detail, stdout, exit_code = self._attempt_stage1_task(
+                model, task, stage_dir, attempt
+            )
+            attempts.append({"attempt": attempt, "passed": passed, "detail": detail,
+                             "stdout": stdout, "exit_code": exit_code})
+            if passed:
+                break
+
+        any_passed = any(a["passed"] for a in attempts)
+        n_pass = sum(a["passed"] for a in attempts)
+        detail = (
+            f"passed on attempt {next(a['attempt'] for a in attempts if a['passed'])}"
+            f"/{self.stage1_attempts}"
+            if any_passed
+            else attempts[-1]["detail"]
+        )
+        _write_json(
+            stage_dir / "tasks" / _safe(task.id) / "result.json",
+            {"task_id": task.id, "prompt": task.prompt, "passed": any_passed,
+             "passed_count": n_pass, "attempts": attempts},
+        )
+        return Stage1TaskResult(task.id, any_passed, detail)
+
+    def _attempt_stage1_task(
+        self, model: CandidateModel, task: Stage1Task, stage_dir: Path, attempt: int
+    ) -> tuple[bool, str, str, int]:
+        task_dir = stage_dir / "tasks" / _safe(task.id) / f"attempt{attempt}"
         world_db = task_dir / "world.db"
         world = WorldState.create(world_db)
         world.seed(task.world_seed)
@@ -284,19 +331,14 @@ class Runner:
         try:
             result = harness.run_oneshot(task.prompt)
         except ContextWindowError as exc:  # shouldn't reach here post-gate, but be safe
-            return Stage1TaskResult(task.id, False, f"context error: {exc}")
+            return False, f"context error: {exc}", "", -1
 
         graded_world = WorldState(world_db)
         try:
             passed, detail = self.stage1_grader(graded_world, task.expected_state)
         finally:
             graded_world.close()
-        _write_json(
-            task_dir / "result.json",
-            {"task_id": task.id, "prompt": task.prompt, "stdout": result.stdout,
-             "exit_code": result.exit_code, "passed": passed, "detail": detail},
-        )
-        return Stage1TaskResult(task.id, passed, detail)
+        return passed, detail, result.stdout, result.exit_code
 
     # --- Stage 2 -------------------------------------------------------------
 
@@ -419,6 +461,10 @@ class Runner:
     ) -> Harness:
         harness = self.harness_factory(home, model)
         harness.setup()
+        # Warm the model BEFORE registering/running so its load can't race MCP
+        # server startup (which otherwise leaves the agent with no world tools).
+        if self.warm_models:
+            harness.warm()
         register_world(harness, str(world_db), python_exe=self.python_exe)
         return harness
 
