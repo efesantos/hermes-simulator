@@ -213,6 +213,40 @@ class Harness:
             )
         return result
 
+    def add_mcp_server(
+        self,
+        name: str,
+        *,
+        command: str,
+        args: list[str],
+        env: dict[str, str] | None = None,
+    ) -> HarnessResult:
+        """Register a stdio MCP server into this home (``hermes mcp add``).
+
+        Auto-confirms the discovery/enable prompt by piping ``y``. ``command`` +
+        ``args`` are how Hermes will launch the server; pass the server's own
+        Python interpreter (one that can import the server module) as ``command``.
+        """
+        cmd = [self.hermes_bin, "mcp", "add", name, "--command", command]
+        for kv in (env or {}).items():
+            cmd += ["--env", f"{kv[0]}={kv[1]}"]
+        # --args must be last; it greedily consumes the remainder.
+        cmd += ["--args", *args]
+        completed = subprocess.run(
+            cmd,
+            env=self._env(),
+            input="y\n",
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+        )
+        return HarnessResult(
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            exit_code=completed.returncode,
+        )
+
     def reset_memory(self) -> None:
         """Wipe this home's memory (``hermes memory reset``).
 
