@@ -1,0 +1,44 @@
+"""Tests for the full-run pipeline glue (run_full)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from simulator.config import LOCAL_OLLAMA, CandidateModel, RunConfig
+from simulator.harness import Harness
+from simulator.pipeline import run_full
+from simulator.scenarios.personas.dana import PERSONA as DANA
+
+
+def _model(model_id, ctx=65_536):
+    return CandidateModel(id=model_id, hosting_profile=LOCAL_OLLAMA, context_length=ctx)
+
+
+def test_run_full_drives_funnel_to_a_written_report(tmp_path, fake_hermes, monkeypatch):
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    cfg = RunConfig(
+        candidates=(_model("qwen3.6:latest"), _model("qwen3:8b", ctx=40_960)),
+        seeds=(0, 1), k=2,
+    )
+    factory = lambda home, model: Harness(home, model, hermes_bin=fake_hermes, timeout=60)
+
+    report, rendered = run_full(
+        cfg, [DANA], stage1_tasks=[], results_root=tmp_path,
+        harness_factory=factory, run_id="full",
+    )
+
+    # Survivor ranked, below-floor model eliminated with a reason.
+    assert [r.model_id for r in report.ranked] == ["qwen3.6:latest"]
+    assert report.ranked[0].composite is not None
+    assert report.eliminated[0].model_id == "qwen3:8b"
+    assert "below floor" in report.eliminated[0].reason
+
+    # Report persisted next to the trajectories.
+    assert (tmp_path / "full" / "report.txt").read_text() == rendered
+    assert "Composite" in rendered
+
+
+def test_family_name_inference():
+    assert _model("qwen3.6:latest").family_name == "qwen"
+    assert _model("gemma3:12b").family_name == "gemma"
+    assert CandidateModel("llama-3.3-70b", LOCAL_OLLAMA, 128_000, family="meta").family_name == "meta"

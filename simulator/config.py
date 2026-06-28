@@ -75,6 +75,18 @@ class CandidateModel:
     label: str = ""  # human-friendly name for reports; defaults to id
     price_per_1m_input: float = 0.0
     price_per_1m_output: float = 0.0
+    # Model family (e.g. "qwen", "gemma", "llama") — the judge must differ from it
+    # (KTD4). Inferred from the id prefix when left blank.
+    family: str = ""
+
+    @property
+    def family_name(self) -> str:
+        if self.family:
+            return self.family
+        # Infer from the id: take the leading alphabetic run ("qwen3.6:latest" -> "qwen").
+        head = self.id.split(":")[0].split("-")[0]
+        alpha = "".join(c for c in head if c.isalpha())
+        return alpha or self.id
 
     @property
     def hosting(self) -> Hosting:
