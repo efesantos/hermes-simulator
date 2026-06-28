@@ -46,6 +46,8 @@ def run_full(
     judge: Optional[Judge] = None,
     run_id: Optional[str] = None,
     success_threshold: float = 0.5,
+    stage1_attempts: int = 1,
+    stage1_pass_threshold: float = 0.6,
 ) -> tuple[Report, str]:
     """Run the whole simulator and return ``(report, rendered_table)``.
 
@@ -58,6 +60,8 @@ def run_full(
         harness_factory=harness_factory,
         python_exe=python_exe,
         counterparty=counterparty,
+        stage1_attempts=stage1_attempts,
+        stage1_pass_threshold=stage1_pass_threshold,
     )
     matrix = runner.run_matrix(personas, stage1_tasks or [], run_id=run_id)
 
