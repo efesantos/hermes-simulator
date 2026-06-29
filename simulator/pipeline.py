@@ -13,6 +13,7 @@ in tests; the default uses the real ``hermes``.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -83,6 +84,11 @@ def run_full(
                 # The track's home still holds accrued memory + registered world.
                 exam_harness = harness_factory(Path(track.trajectory_dir) / "home", model)
                 memory_answers = administer_exam(exam_harness, persona)
+                # Persist so the run is fully reportable from disk even if a later
+                # track is interrupted (e.g. the machine sleeps mid-run).
+                (Path(track.trajectory_dir) / "memory_exam.json").write_text(
+                    json.dumps(memory_answers, indent=2)
+                )
 
             judge_mean = None
             if judge is not None and track.days:

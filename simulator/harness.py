@@ -168,7 +168,7 @@ class Harness:
         self.home.mkdir(parents=True, exist_ok=True)
         self.config_path.write_text(yaml.safe_dump(self._config_dict(), sort_keys=False))
 
-    def warm(self, *, keep_alive: str = "10m", timeout: float = 300.0) -> bool:
+    def warm(self, *, keep_alive: str = "2m", timeout: float = 300.0) -> bool:
         """Preload a local model into Ollama so it's resident before a run.
 
         Critical for correctness, not just speed: when Ollama cold-loads a large
