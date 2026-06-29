@@ -20,6 +20,7 @@ from .config import CANDIDATE_FIELDS, Hosting, run_config_for
 from .counterparty import CounterpartyConfig, LLMCounterparty
 from .env import load_project_env
 from .grading.judge import subscription_judge
+from .openrouter import tool_capable_ids
 from .pipeline import run_full
 from .scenarios.personas import ALL_PERSONAS
 from .scenarios.stage1 import STAGE1_TASKS
@@ -45,11 +46,23 @@ def main() -> None:
                         help="model alias/id passed to `claude --model` for the judge")
     parser.add_argument("--seeds", type=int, default=None,
                         help="number of seeds (tracks per model); fewer = cheaper/faster (default 5)")
+    parser.add_argument("--model", action="append", default=None,
+                        help="restrict the field to these model id(s); repeatable. Lets one "
+                             "model run as its own job (e.g. to fit a time cap), writing into "
+                             "a shared --run-id for build_report.py to combine.")
     parser.add_argument("--persona", action="append", default=None,
                         help="persona name(s) to run; repeatable (default: all)")
     args = parser.parse_args()
 
     cfg = run_config_for(args.candidates)
+    if args.model:
+        wanted = set(args.model)
+        kept = tuple(m for m in cfg.candidates if m.id in wanted)
+        unknown = wanted - {m.id for m in kept}
+        if unknown:
+            sys.exit(f"--model id(s) not in the '{args.candidates}' field: {', '.join(sorted(unknown))}\n"
+                     f"Available: {', '.join(m.id for m in cfg.candidates)}")
+        cfg = replace(cfg, candidates=kept)
     if args.seeds is not None:
         if args.seeds < 1:
             sys.exit("--seeds must be >= 1")
@@ -71,6 +84,24 @@ def main() -> None:
             + f"\nThe '{args.candidates}' candidate field needs them set. "
             "Export the key(s) and re-run, e.g.:\n  export OPENROUTER_API_KEY=sk-or-..."
         )
+
+    # Guard: an OpenRouter candidate that can't do tool use fails mid-run as a
+    # confusing "did not call any tool" elimination — catch it up front. Network
+    # failure is non-fatal (warn and proceed).
+    or_ids = [m.id for m in cfg.candidates if m.hosting_profile.provider == "openrouter"]
+    if or_ids:
+        try:
+            caps = tool_capable_ids(or_ids)
+            no_tools = sorted(i for i, ok in caps.items() if not ok)
+            if no_tools:
+                sys.exit(
+                    "OpenRouter candidate(s) without tool-use support (agentic runs "
+                    "require it): " + ", ".join(no_tools)
+                    + "\nPick models whose OpenRouter card lists 'tools' in supported_parameters."
+                )
+        except Exception as exc:  # network/parse error — don't block the run
+            print(f"warning: could not verify OpenRouter tool support ({exc}); proceeding.",
+                  file=sys.stderr)
 
     names = args.persona or list(ALL_PERSONAS)
     personas = [ALL_PERSONAS[n] for n in names]

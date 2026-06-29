@@ -261,16 +261,17 @@ API_CANDIDATES: tuple[CandidateModel, ...] = (
         price_per_1m_output=3.00,
         family="glm",
     ),
-    # A tool-tuned 70B from a different family (Nous Hermes — thematically apt and
-    # explicitly tool-tuned).
+    # A tool-use-capable 70B from a different family. (Hermes-3 70B was tried first
+    # but its OpenRouter providers expose no tool-use endpoint — 404 "No endpoints
+    # found that support tool use" — so it cannot run as an agent here.)
     CandidateModel(
-        id="nousresearch/hermes-3-llama-3.1-70b",
+        id="meta-llama/llama-3.3-70b-instruct",
         hosting_profile=OPENROUTER,
         context_length=65_536,
-        label="Hermes-3 70B (OpenRouter)",
-        price_per_1m_input=0.70,
-        price_per_1m_output=0.70,
-        family="hermes",
+        label="Llama-3.3 70B (OpenRouter)",
+        price_per_1m_input=0.10,
+        price_per_1m_output=0.32,
+        family="llama",
     ),
 )
 

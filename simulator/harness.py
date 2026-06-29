@@ -279,7 +279,13 @@ class Harness:
             # => MCP cold-start starvation). High input means the tools were
             # present and the model chose not to use them — a real result, not
             # infra; retrying would just burn runs.
-            if session.input_tokens >= TOOLS_LOADED_MIN_INPUT:
+            #
+            # The input-token proxy is only trustworthy for LOCAL models, where it
+            # was calibrated (no prompt caching; ~10-12K base, ~20K+ with tools).
+            # On the API path token counts run lower and vary by provider/caching,
+            # so a tools-loaded run can sit under the threshold; there we retry on
+            # any zero-tool run to give the cold-start race its full set of chances.
+            if self.model.hosting is Hosting.LOCAL and session.input_tokens >= TOOLS_LOADED_MIN_INPUT:
                 return result
             result = self._run_once(prompt, extra_env)
         return result

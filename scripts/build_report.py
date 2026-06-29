@@ -14,7 +14,13 @@ import json
 import sys
 from pathlib import Path
 
-from simulator.config import DEFAULT_CANDIDATES, CandidateModel, LOCAL_OLLAMA, RunConfig
+from simulator.config import (
+    API_CANDIDATES,
+    DEFAULT_CANDIDATES,
+    CandidateModel,
+    LOCAL_OLLAMA,
+    RunConfig,
+)
 from simulator.harness import SessionRow
 from simulator.metrics import evaluate_track, rollup
 from simulator.report import build_report, render_table
@@ -31,7 +37,9 @@ def _session_from_dict(d: dict) -> SessionRow:
 
 
 def _model_for(model_id: str) -> CandidateModel:
-    for c in DEFAULT_CANDIDATES:
+    # Search both fields so API candidates keep their real provider + prices when
+    # a report is rebuilt from disk (else an API model is mis-costed as local $0).
+    for c in (*DEFAULT_CANDIDATES, *API_CANDIDATES):
         if c.id == model_id:
             return c
     # Unknown id (e.g. an ad-hoc variant): synthesize a local 64K candidate.
@@ -45,7 +53,11 @@ def main() -> None:
     if not run_dir.exists():
         raise SystemExit(f"no run at {run_dir}")
 
-    cfg = RunConfig(candidates=DEFAULT_CANDIDATES, seeds=(0, 1), k=2)
+    # Recovery report: reliability is computed at k=1 (mean pass) so it never
+    # fails regardless of how many seeds completed on disk. The authoritative
+    # reliability (pass^k) comes from a single live run; this rebuilds whatever
+    # exists. seeds is generous purely to satisfy the len(seeds) >= k invariant.
+    cfg = RunConfig(candidates=DEFAULT_CANDIDATES, seeds=(0, 1, 2, 3, 4), k=1)
 
     # Stage-1 outcomes -> eliminated map.
     eliminated: dict[str, str] = {}
