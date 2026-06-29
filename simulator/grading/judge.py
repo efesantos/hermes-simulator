@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import statistics
+import subprocess
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -80,6 +82,64 @@ def openai_chat(config: JudgeConfig) -> ChatFn:
         with urllib.request.urlopen(req, timeout=120) as resp:
             body = json.loads(resp.read())
         return body["choices"][0]["message"]["content"]
+
+    return _chat
+
+
+def claude_cli_chat(
+    config: JudgeConfig,
+    *,
+    claude_bin: Optional[str] = None,
+    timeout: float = 180.0,
+) -> ChatFn:
+    """A :data:`ChatFn` that judges via the **Claude Code subscription**, not an API key.
+
+    Shells out to the headless ``claude`` CLI (``claude -p``), which authenticates
+    with whatever Claude Code is logged in as on this machine — so no Anthropic API
+    key is needed (the only secret the system needs is ``OPENROUTER_API_KEY`` for
+    the candidate models). Mirrors how the harness shells out to ``hermes``.
+
+    The system + user messages are folded into one prompt (rather than passed via
+    ``--append-system-prompt``) so the rubric instruction is explicit in the turn
+    and we don't depend on Claude Code's default coding-agent system prompt.
+    ``temperature`` is accepted for interface parity but not forwarded — the CLI
+    does not expose it; rubric anchoring carries determinism.
+
+    NOTE: the exact CLI flags (``--output-format json``, ``--model``) are confirmed
+    against the installed Claude Code in the Task 0 spike; the parse tolerates both
+    the JSON envelope and a raw-text fallback.
+    """
+    binary = claude_bin or os.environ.get("CLAUDE_BIN", "claude")
+
+    def _chat(messages: list[dict[str, str]], *, temperature: float) -> str:
+        system = "\n".join(m["content"] for m in messages if m.get("role") == "system")
+        user = "\n\n".join(m["content"] for m in messages if m.get("role") != "system")
+        prompt = f"{system}\n\n{user}" if system else user
+        cmd = [binary, "-p", prompt, "--output-format", "json"]
+        if config.model:
+            cmd += ["--model", config.model]
+        try:
+            completed = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout
+            )
+        except FileNotFoundError as exc:
+            raise JudgeError(
+                f"claude CLI not found ({binary!r}); install Claude Code or set CLAUDE_BIN"
+            ) from exc
+        if completed.returncode != 0:
+            raise JudgeError(
+                f"claude CLI failed (exit {completed.returncode}): "
+                f"{(completed.stderr or completed.stdout)[:300]}"
+            )
+        out = completed.stdout.strip()
+        # ``--output-format json`` wraps the answer: {"type":"result","result": "..."}.
+        try:
+            envelope = json.loads(out)
+            if isinstance(envelope, dict) and "result" in envelope:
+                return str(envelope["result"])
+        except json.JSONDecodeError:
+            pass
+        return out
 
     return _chat
 
@@ -188,6 +248,31 @@ class Judge:
             temperature=self.config.temperature,
         ))
         return str(verdict.get("winner", "TIE")).strip().lower()
+
+
+def subscription_judge(
+    *,
+    model: str = "sonnet",
+    family: str = "anthropic",
+    n_judges: int = 1,
+    rubric: Optional[dict[str, str]] = None,
+    claude_bin: Optional[str] = None,
+) -> "Judge":
+    """A :class:`Judge` that scores via the Claude Code subscription (no API key).
+
+    ``model`` is passed to ``claude --model`` (alias like ``sonnet``/``opus`` or a
+    full id). ``family`` must differ from every candidate's family; the API field
+    has no Anthropic-family models, so ``"anthropic"`` is always cross-family here.
+    Defaults to ``sonnet`` to conserve subscription usage — judging is rubric-bound
+    and does not need the largest model.
+    """
+    config = JudgeConfig(model=model, family=family, base_url="", api_key="")
+    return Judge(
+        config,
+        chat_fn=claude_cli_chat(config, claude_bin=claude_bin),
+        n_judges=n_judges,
+        rubric=rubric,
+    )
 
 
 def _digest(text: str) -> str:

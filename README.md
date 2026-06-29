@@ -59,6 +59,7 @@ results/             trajectories + reports (gitignored)
 - Python ≥ 3.11. The mock-world MCP servers run under this project's venv (which
   carries the `mcp` SDK), launched as `python -m simulator.world.<server>`.
 - An API key only if you use API-hosted candidates or the LLM judge.
+  - For repo-safe persistence, store it in a local `.env` file (see below).
 
 ## Usage
 
@@ -71,6 +72,17 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 # Include the Stage-1 pre-filter suite:
 .venv/bin/python -m simulator --with-stage1
 ```
+
+Repo-safe persistent API key setup (one-time):
+
+```bash
+cp .env.example .env
+# Edit .env and set OPENROUTER_API_KEY=...
+```
+
+`python -m simulator` auto-loads `.env` from the project root at startup (without
+overwriting already-exported environment variables), so API runs can work without
+re-exporting the key every new shell session.
 
 Programmatic use:
 

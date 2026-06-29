@@ -205,6 +205,18 @@ class Harness:
         the per-model entry to match the shape of a real ``config.yaml``.
         """
         m = self.model
+        provider_block: dict = {
+            "api": m.base_url,
+            "default_model": m.id,
+            "name": m.hosting_profile.name,
+            "models": [
+                {"name": m.id, "context_length": m.context_length},
+            ],
+        }
+        # API providers authenticate via a bearer key Hermes reads from the named
+        # env var; the harness injects that var into the subprocess (see _run_once).
+        if m.hosting_profile.key_env:
+            provider_block["key_env"] = m.hosting_profile.key_env
         return {
             "model": {
                 "context_length": m.context_length,
@@ -212,14 +224,7 @@ class Harness:
                 "provider": m.provider,
             },
             "providers": {
-                m.provider: {
-                    "api": m.base_url,
-                    "default_model": m.id,
-                    "name": m.hosting_profile.name,
-                    "models": [
-                        {"name": m.id, "context_length": m.context_length},
-                    ],
-                },
+                m.provider: provider_block,
             },
             # Auto-approve unseen shell hooks; required for unattended runs.
             "hooks_auto_accept": True,

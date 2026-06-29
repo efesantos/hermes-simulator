@@ -8,6 +8,10 @@ venv/
 
 # Simulator run artifacts (trajectories, per-track homes, reports)
 results/
+# Local secrets / machine-specific overrides
+.env
+.env.*
+!.env.example
 
 # Unrelated vendored tooling checked out in this working tree
 skills/

@@ -6,16 +6,22 @@ The week is built to exercise memory, not just task completion:
   seeded on the calendar).
 - **Early preference reveal:** Dana never takes appointments before 9am (stated
   day 1) — a standing constraint the agent should honor on every later booking.
-- **Preference/regularity that CHANGES mid-run:** on day 2 Coach Rivera emails
-  that soccer moves from Thursday to **Wednesday** at 4pm going forward. A model
-  with real memory updates; one that pattern-matches keeps saying Thursday.
+- **Two preferences/regularities that CHANGE mid-run** (knowledge-update is the
+  dimension that most distinguishes real memory from pattern-matching, so the week
+  exercises it twice from different angles):
+  - on day 2 Coach Rivera emails that soccer moves from Thursday to **Wednesday**
+    at 4pm going forward;
+  - on day 5 Riverside Swim emails that Theo's swim class moves from Tuesday to
+    **Monday**.
+  A model with real memory adopts both; one that pattern-matches keeps asserting
+  the original day.
 - **Abstention trap:** Theo's dentist appointment is plausible (Dana books her
   *own* cleaning, the kids see Dr. Patel) but is **never scheduled**. A model
   should decline to invent one.
 
 The ``answer_key`` encodes the end-of-run exam (recall / knowledge_update /
 abstention) and the behavioral signals (no pre-9am booking; drop "Thursday" for
-soccer after day 2).
+soccer after day 2; drop "Tuesday" for swim after day 5).
 """
 
 from __future__ import annotations
@@ -31,11 +37,15 @@ _WORLD_SEED = {
         {"name": "Lincoln Elementary", "email": "office@lincoln.test", "relation": "school"},
         {"name": "Coach Rivera", "email": "rivera@youthsoccer.test", "relation": "coach"},
         {"name": "Dr. Patel", "email": "frontdesk@pateldental.test", "relation": "dentist"},
+        {"name": "Riverside Swim", "email": "front@riversideswim.test", "relation": "swim school"},
     ],
     "events": [
         # The learnable regularity, seeded for this week (Thu 2026-07-09).
         {"title": "Mia soccer practice", "start": "2026-07-09T16:00:00",
          "end": "2026-07-09T17:00:00", "location": "Field 3"},
+        # Second learnable regularity, seeded for this week (Tue 2026-07-07).
+        {"title": "Theo swim class", "start": "2026-07-07T17:00:00",
+         "end": "2026-07-07T17:45:00", "location": "Riverside Pool"},
     ],
     "emails": [
         {"from_addr": "office@lincoln.test", "to_addr": ME,
@@ -48,6 +58,17 @@ _WORLD_SEED = {
 _DAYS = (
     DayPlan(
         day=1, date="2026-07-06",
+        inbound=(
+            ExogenousEvent(
+                "email",
+                {"from_addr": "front@riversideswim.test", "to_addr": ME,
+                 "subject": "Theo's swim class schedule",
+                 "body": ("Welcome! Just confirming Theo's swim class is every "
+                          "TUESDAY at 5pm at Riverside Pool. See you there!"),
+                 "timestamp": "2026-07-06T08:00:00"},
+                description="Plants the second learnable regularity (swim on Tuesdays).",
+            ),
+        ),
         user_prompt=(
             "Two things. First, I need a dental cleaning booked with Dr. Patel this "
             "week — but I never take appointments before 9am, so keep that in mind "
@@ -111,6 +132,17 @@ _DAYS = (
     ),
     DayPlan(
         day=5, date="2026-07-10",
+        inbound=(
+            ExogenousEvent(
+                "email",
+                {"from_addr": "front@riversideswim.test", "to_addr": ME,
+                 "subject": "Swim class moving to Mondays",
+                 "body": ("Hi Dana — starting next week, Theo's swim class moves "
+                          "from Tuesday to MONDAY at 5pm, same pool. Thanks!"),
+                 "timestamp": "2026-07-10T08:00:00"},
+                description="Second knowledge update — swim moves Tuesday -> Monday.",
+            ),
+        ),
         user_prompt=(
             "Give me the rundown of the kids' recurring activities for next week so I "
             "can plan."
@@ -143,6 +175,13 @@ _ANSWER_KEY = {
             "stale": ["thursday"],  # the original day — penalized if asserted
         },
         {
+            "id": "update_swim_day",
+            "kind": "knowledge_update",
+            "question": "What day of the week is Theo's swim class now?",
+            "expected": ["monday"],  # the updated day (changed on day 5)
+            "stale": ["tuesday"],  # the original day — penalized if asserted
+        },
+        {
             "id": "abstain_theo_dentist",
             "kind": "abstention",
             "question": "When is Theo's dentist appointment?",
@@ -167,6 +206,15 @@ _ANSWER_KEY = {
             "corrected_keyword": "wednesday",
             "context": "soccer",
             "description": "After day 2, stops treating Mia's soccer as Thursday.",
+        },
+        {
+            "id": "adopts_swim_change",
+            "kind": "not_after_day",
+            "learned_on_day": 5,
+            "forbidden_keyword": "tuesday",
+            "corrected_keyword": "monday",
+            "context": "swim",
+            "description": "After day 5, stops treating Theo's swim as Tuesday.",
         },
     ],
 }
