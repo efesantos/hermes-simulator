@@ -32,11 +32,13 @@ from .config import CandidateModel, Hosting
 # Default hermes executable. Overridable per-Harness for tests / alternate installs.
 DEFAULT_HERMES_BIN = "hermes"
 
-# If a run made zero tool calls but its input is at least this large, the
-# mock-world tool schemas (~10-12K tokens) WERE loaded and the model simply chose
-# not to call one — retrying won't help. Below it, the MCP servers hadn't booted
-# (cold-start starvation) and a retry can recover. Sits in the clear gap between a
-# model's no-tools base (~8-12K) and its with-tools input (~20K+).
+# Safety-net threshold for the expect_tools retry (no longer the cold-start fix —
+# the persistent gateway removed that race; see warm() and WorldGateway). If a run
+# made zero tool calls but its input is at least this large, the mock-world tool
+# schemas (~10-12K tokens) WERE loaded and the model simply chose not to call one —
+# retrying won't help. Below it, the tools were absent (e.g. a server died
+# mid-run) and a retry can recover. Sits in the clear gap between a model's
+# no-tools base (~8-12K) and its with-tools input (~20K+).
 TOOLS_LOADED_MIN_INPUT = 15_000
 
 # Hermes refuses a model whose usable context is under the floor, in a few
@@ -171,12 +173,14 @@ class Harness:
     def warm(self, *, keep_alive: str = "2m", timeout: float = 300.0) -> bool:
         """Preload a local model into Ollama so it's resident before a run.
 
-        Critical for correctness, not just speed: when Ollama cold-loads a large
-        model, that load races the MCP servers' startup and Hermes's tool
-        discovery sometimes fires first — the agent then runs with NO mock-world
-        tools and every tool-requiring task fails as an artifact. Warming the
-        model (at the forced context) removes the race. Best-effort and a no-op
-        for API-hosted models; returns True if the warm call succeeded.
+        Safety net / latency win — no longer load-bearing for tool availability.
+        The persistent :class:`~simulator.world.gateway.WorldGateway` now starts the
+        mock-world servers before any run, so Hermes's tool discovery is a fast
+        connect-to-a-running-server and no longer races the model load. (Before the
+        gateway, warming a local model incidentally gave discovery time to land,
+        which masked the race — see
+        ``docs/solutions/integration-issues/mcp-cold-start-race.md``.) Best-effort
+        and a no-op for API-hosted models; returns True if the warm call succeeded.
         """
         if self.model.hosting != Hosting.LOCAL:
             return False
@@ -234,13 +238,13 @@ class Harness:
         env = dict(os.environ)
         env["HERMES_HOME"] = str(self.home)
         env["HERMES_ACCEPT_HOOKS"] = "1"
-        # Give the freshly-spawned mock-world MCP servers time to register before
-        # the agent's first turn, so fast API models aren't handed a tool-less
-        # turn and falsely failed. Hermes joins the discovery thread with this as
-        # an upper bound, returning as soon as discovery finishes — so a generous
-        # value costs nothing when servers boot quickly. Requires the one-line
-        # patch to hermes_cli/mcp_startup.py to honor this var (see
-        # docs/solutions/integration-issues/api-path-mcp-cold-start.md). An explicit
+        # Safety net only: the persistent gateway means the mock-world servers are
+        # already running and listening, so discovery (a connect + list) completes
+        # well inside Hermes's default first-turn wait — this var is no longer what
+        # makes tools land. Kept as a cheap upper bound for a slow connect; Hermes
+        # returns as soon as discovery finishes, so a generous value costs nothing.
+        # (Honoring it requires the one-line patch to hermes_cli/mcp_startup.py; see
+        # docs/solutions/integration-issues/api-path-mcp-cold-start.md.) An explicit
         # value already in the environment wins.
         env.setdefault("HERMES_MCP_DISCOVERY_WAIT", "20")
         if extra:
@@ -263,13 +267,13 @@ class Harness:
         server Hermes launches) — used to pass the simulated clock per day.
 
         When ``expect_tools`` is set, the run is retried (up to ``tool_retries``
-        times) if it completed without calling **any** tool. The mock-world MCP
-        servers are spawned fresh per run and, for fast-loading models, the agent
-        can start before they finish booting — running tool-less. Retrying lets a
-        genuinely capable model get its tools on a later attempt, while a model
-        that truly never emits tool calls (e.g. a format-incompatible one) still
-        ends with zero and fails correctly. Retrying is safe: a tool-less run made
-        no world changes.
+        times) if it completed without calling **any** tool. This is now a safety
+        net, not the cold-start fix: the persistent gateway keeps the mock-world
+        servers running so their tools are present from the first turn. A retry
+        still covers a transient (e.g. a server dying mid-run), while a model that
+        truly never emits tool calls (e.g. a format-incompatible one) still ends
+        with zero and fails correctly. Retrying is safe: a tool-less run made no
+        world changes.
 
         Raises :class:`ContextWindowError` when Hermes refuses the model for being
         below the context floor — an eligibility failure the runner records and
@@ -367,14 +371,17 @@ class Harness:
         Used for the persistent world gateway: the three mock-world servers are
         long-lived HTTP servers, so Hermes connects to them by URL
         (``hermes mcp add <name> --url <url>``) instead of spawning a stdio
-        subprocess per run. Auto-confirms the enable prompt as the stdio variant
-        does. A non-zero hermes exit is surfaced on the returned ``HarnessResult``,
-        not swallowed.
+        subprocess per run. The URL flow asks two questions, in order:
+        ``Does this server require authentication? [Y/n]`` (we answer **n** — the
+        loopback servers are unauthenticated) and ``Enable all N tools? [Y/n/select]``
+        (we answer **y**). Answering ``y`` to the first instead sends the add down
+        an auth path and the server is never saved. A non-zero hermes exit is
+        surfaced on the returned ``HarnessResult``, not swallowed.
         """
         completed = subprocess.run(
             [self.hermes_bin, "mcp", "add", name, "--url", url],
             env=self._env(),
-            input="y\n",
+            input="n\ny\n",  # no auth, then enable all tools
             capture_output=True,
             text=True,
             timeout=self.timeout,

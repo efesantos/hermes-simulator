@@ -198,7 +198,8 @@ def test_add_remote_mcp_server_issues_url_command(tmp_path: Path, monkeypatch):
     assert captured["cmd"] == [
         "hermes-x", "mcp", "add", "mockcal", "--url", "http://127.0.0.1:9001/mcp",
     ]
-    assert captured["input"] == "y\n"  # auto-confirms the enable prompt
+    # "n" to the auth prompt (unauthenticated loopback), "y" to enable all tools.
+    assert captured["input"] == "n\ny\n"
 
 
 def test_add_remote_mcp_server_surfaces_nonzero_exit(tmp_path: Path, monkeypatch):

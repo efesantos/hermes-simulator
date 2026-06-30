@@ -11,7 +11,7 @@ symptoms:
   - "Owl Alpha passes the smoke in the same run; GLM/Llama fail every retry"
   - "HERMES_DUMP_REQUESTS shows the request carries only hermes' 16 built-in tools — the mock-world MCP tools are absent"
 root_cause: async_timing
-resolution_type: pending
+resolution_type: resolved
 severity: high
 tags:
   - mcp
@@ -112,6 +112,38 @@ raises the ceiling but the first-turn snapshot is taken before discovery lands o
 this path. **Full robustness needs fix B (persistent gateway)** or a smoke that
 does not depend on the first-turn mock-world snapshot (e.g. gate on a built-in
 tool call, or re-snapshot after discovery completes).
+
+## Resolved (2026-06-30): fix B shipped — persistent gateway
+
+Fix B (below) is implemented and **the race is gone**. The three mock-world
+servers now run as long-lived `streamable-http` servers started **once per track**
+by `simulator/world/gateway.py` (`WorldGateway`) and registered with hermes **by
+URL** (`hermes mcp add --url`, via `Harness.add_remote_mcp_server`). Because the
+servers are already listening when hermes connects, discovery is a fast
+connect-and-list that completes before the first turn — deterministically, for the
+single-turn smoke and every Stage-2 day, for **all** models regardless of how
+eagerly they call tools.
+
+What changed (plan: `docs/plans/2026-06-30-001-feat-persistent-mcp-gateway-plan.md`):
+
+- **Transport:** the servers select `streamable-http` when a port is configured,
+  else stdio (the ad-hoc fallback). `simulator/world/_server_common.py`,
+  `*_server.py`.
+- **Clock:** a persistent server can't read a per-day `HERMES_SIM_NOW` env, so the
+  runner stamps a per-track sidecar file (`<track>/sim_now`) the gateway writes via
+  `set_clock`; `sim_now()` re-reads it per call.
+- **Runner:** `_world_session` starts the gateway per track, registers URLs, runs
+  the smoke + day loop inside the context, and tears the gateway down in a
+  `finally`.
+- **Mitigations downgraded to safety nets** (kept, not removed): `warm()`, the
+  `TOOLS_LOADED_MIN_INPUT` token-gate retry, and `HERMES_MCP_DISCOVERY_WAIT` are no
+  longer load-bearing for tool availability — they only catch a server that dies
+  mid-run.
+
+Verification: the first-turn request now always carries the mock-world tools
+(`list_events`, …) in `HERMES_DUMP_REQUESTS` dumps — see
+`tests/test_live_world.py` (`-m live`). Note fix A's hermes patch is no longer
+required for correctness; it remains only as a redundant safety margin.
 
 ## Fixes
 
