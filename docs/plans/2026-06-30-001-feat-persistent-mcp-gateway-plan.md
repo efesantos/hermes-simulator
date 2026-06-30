@@ -1,7 +1,7 @@
 ---
 title: "feat: Persistent MCP gateway — kill the cold-start race for reliable API benchmarking"
 type: feat
-status: active
+status: completed
 date: 2026-06-30
 ---
 
