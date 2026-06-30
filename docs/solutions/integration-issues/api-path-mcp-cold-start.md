@@ -93,11 +93,29 @@ makes a successful call). Guard added: `simulator/openrouter.py` +
 `__main__` check filters candidates by `supported_parameters` containing `tools`
 before a run. Replaced with `meta-llama/llama-3.3-70b-instruct` (tools=True).
 
-## Fixes (pending a decision)
+## Update (2026-06-30): fix A applied — partial
 
-Neither is applied yet — both touch the harness contract and warrant a call.
+Fix A (below) was applied and **unblocked GLM-5.2**: it now passes the smoke and
+runs a full dana track (61 tool calls, ~39K input → mock-world tools present),
+ranking #1. **But it only partly fixes the smoke.** The env-wait helps the
+*multi-turn* stage runs (discovery lands by turn 2+, so eager models accumulate
+mock-world tool calls) and helps eager models pass the single-turn smoke by
+calling a *built-in* tool. It does **not** reliably get the mock-world tools into
+the smoke's *first-turn* snapshot: a post-patch `HERMES_DUMP_REQUESTS` dump still
+showed only the 16 built-in tools, even though the MCP stderr shows the servers
+starting and answering `ListToolsRequest`. So a **polite** model (Llama-3.3-70B)
+that declines to call a non-existent calendar tool is still eliminated at the
+smoke, while eager models (GLM-5.2, Owl) pass by calling a built-in.
 
-**A. Env-gate the discovery wait (smallest).** Make
+Takeaway: the smoke is a single-turn gate that races discovery; the env-wait
+raises the ceiling but the first-turn snapshot is taken before discovery lands on
+this path. **Full robustness needs fix B (persistent gateway)** or a smoke that
+does not depend on the first-turn mock-world snapshot (e.g. gate on a built-in
+tool call, or re-snapshot after discovery completes).
+
+## Fixes
+
+**A. Env-gate the discovery wait (applied; partial — see Update above).** Make
 `wait_for_mcp_discovery` honor `HERMES_MCP_DISCOVERY_WAIT` (a join with a larger
 ceiling returns as soon as discovery finishes, so there is no cost when it is
 fast), then have the harness export e.g. `HERMES_MCP_DISCOVERY_WAIT=20` for every
