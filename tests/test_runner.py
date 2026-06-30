@@ -9,8 +9,10 @@ import pytest
 
 from simulator.config import LOCAL_OLLAMA, CandidateModel, RunConfig
 from simulator.harness import Harness, HarnessResult, SessionRow
-from simulator.runner import Runner, evaluate_format_smoke
+from simulator.runner import SMOKE_PROMPT, Runner, evaluate_format_smoke
 from simulator.scenarios.types import DayPlan, ExogenousEvent, Persona, Stage1Task
+from simulator.world.gateway import GatewayError
+from simulator.world.registration import WORLD_SERVERS
 from simulator.world.state import WorldState
 
 
@@ -260,6 +262,125 @@ def test_run_matrix_drops_ineligible_then_runs_survivors(tmp_path, fake_hermes, 
     # Only the survivor produced Stage-2 tracks.
     assert {t.model_id for t in result.tracks} == {"good:latest"}
     assert (tmp_path / "t" / "matrix.json").exists()
+
+
+# --- gateway lifecycle wiring (U5; faked gateway + harness) ------------------
+
+
+class _SpyGateway:
+    """Records the per-track/per-day gateway lifecycle without spawning servers."""
+
+    def __init__(self, world_db, clock_file, events, *, fail_start=False):
+        self.world_db, self.clock_file = world_db, clock_file
+        self.urls = {n: f"http://127.0.0.1:0/{n}" for n in WORLD_SERVERS}
+        self._events, self._fail_start = events, fail_start
+        self.start_count = self.stop_count = 0
+        self.clocks: list[str] = []
+        self.alive = False
+
+    def start(self):
+        if self._fail_start:
+            raise GatewayError("simulated start failure")
+        self.start_count += 1
+        self.alive = True
+        self._events.append(("start", id(self)))
+        return self.urls
+
+    def set_clock(self, when):
+        assert self.alive, "set_clock called outside the gateway context"
+        self.clocks.append(when)
+
+    def stop(self):
+        self.stop_count += 1
+        self.alive = False
+        self._events.append(("stop", id(self)))
+
+
+def _spy_runner(fake_hermes, cfg, *, fail_start=False, run_raises=False, **kw):
+    record: dict = {"events": [], "registered": [], "gateways": []}
+
+    def hfactory(home, model):
+        h = Harness(home, model, hermes_bin=fake_hermes, timeout=60)
+        orig_run, orig_reg = h.run_oneshot, h.add_remote_mcp_server
+
+        def run(prompt, **rkw):
+            record["events"].append(("run", prompt))
+            if run_raises:
+                raise RuntimeError("harness blew up")
+            return orig_run(prompt, **rkw)
+
+        def reg(name, url):
+            record["registered"].append((name, url))
+            return orig_reg(name, url)
+
+        h.run_oneshot, h.add_remote_mcp_server = run, reg
+        return h
+
+    def gfactory(world_db, clock_file):
+        g = _SpyGateway(world_db, clock_file, record["events"], fail_start=fail_start)
+        record["gateways"].append(g)
+        return g
+
+    return Runner(cfg, harness_factory=hfactory, gateway_factory=gfactory, **kw), record
+
+
+def test_stage2_track_registers_urls_once_and_clocks_each_day(tmp_path, fake_hermes, monkeypatch):
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    runner, rec = _spy_runner(fake_hermes, RunConfig(candidates=(_model(),), seeds=(0,), k=1))
+    persona = _mini_persona()
+    track = runner.run_stage2_track(_model(), persona, seed=0, run_dir=tmp_path / "run")
+
+    assert track.status == "completed"
+    # Exactly one gateway for the track, started once and stopped once.
+    assert len(rec["gateways"]) == 1
+    gw = rec["gateways"][0]
+    assert gw.start_count == 1 and gw.stop_count == 1
+    # The three world servers were registered by URL once for the track.
+    assert {n for n, _ in rec["registered"]} == set(WORLD_SERVERS)
+    assert len(rec["registered"]) == 3
+    # set_clock fired once per day, in day order.
+    assert gw.clocks == [d.clock() for d in persona.days]
+
+
+def test_gateway_stopped_exactly_once_when_a_day_raises(tmp_path, fake_hermes, monkeypatch):
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    runner, rec = _spy_runner(
+        fake_hermes, RunConfig(candidates=(_model(),), seeds=(0,), k=1), run_raises=True
+    )
+    track = runner.run_stage2_track(_model(), _mini_persona(), seed=0, run_dir=tmp_path / "run")
+
+    assert track.status == "failed" and "raised" in track.reason
+    gw = rec["gateways"][0]
+    assert gw.stop_count == 1  # torn down despite the day raising
+
+
+def test_gateway_start_failure_degrades_track_without_crashing(tmp_path, fake_hermes, monkeypatch):
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    runner, rec = _spy_runner(
+        fake_hermes, RunConfig(candidates=(_model(),), seeds=(0,), k=1), fail_start=True
+    )
+    track = runner.run_stage2_track(_model(), _mini_persona(), seed=0, run_dir=tmp_path / "run")
+
+    assert track.status == "failed"
+    assert "gateway start failed" in track.reason
+    assert track.days == []  # no day ran
+
+
+def test_smoke_runs_inside_the_gateway_context(tmp_path, fake_hermes, monkeypatch):
+    # The smoke's first turn must see the world tools, so it runs between the
+    # gateway's start and stop — not before start or after stop.
+    monkeypatch.setenv("FAKE_STDOUT", "DONE")
+    runner, rec = _spy_runner(fake_hermes, RunConfig(candidates=(_model(),), seeds=(0,), k=1))
+    out = runner.run_stage1(_model(), [], tmp_path / "run")
+    assert out.eligible  # smoke passed
+
+    events = rec["events"]
+    starts = [i for i, e in enumerate(events) if e[0] == "start"]
+    stops = [i for i, e in enumerate(events) if e[0] == "stop"]
+    runs = [i for i, e in enumerate(events) if e == ("run", SMOKE_PROMPT)]
+    assert starts and stops and runs
+    # The smoke run sits strictly between a gateway start and stop.
+    assert starts[0] < runs[0] < stops[0]
 
 
 # --- live (real hermes + Ollama; run with `-m live`) -------------------------

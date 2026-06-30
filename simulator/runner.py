@@ -23,15 +23,17 @@ import dataclasses
 import json
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from .config import CandidateModel, RunConfig
 from .grading.deterministic import grade_task
 from .harness import ContextWindowError, Harness, HarnessResult, SessionRow
 from .scenarios.types import Counterparty, DayPlan, Persona, Stage1Task
-from .world.registration import register_world
+from .world.gateway import GatewayError, GatewayFactory, default_gateway_factory
+from .world.registration import WORLD_SERVERS, register_world_urls
 from .world.state import WorldState
 
 # A prompt that *requires* a tool call: a format-incompatible model (spike:
@@ -49,6 +51,32 @@ HarnessFactory = Callable[[Path, CandidateModel], Harness]
 
 def _default_harness_factory(home: Path, model: CandidateModel) -> Harness:
     return Harness(home, model)
+
+
+class _NullGateway:
+    """A no-op gateway for tests/fakes: registers fixed URLs, spawns nothing.
+
+    The fast suite injects a fake ``harness_factory`` (a stand-in ``hermes``), so
+    spawning real world servers would be both pointless and slow. When a custom
+    harness factory is in play, the runner defaults to this gateway: it yields
+    stable loopback URLs (the fake ``hermes mcp add --url`` accepts anything) and
+    no-ops ``set_clock``/``stop``. U5's own tests inject a spy gateway instead to
+    assert the per-track/per-day lifecycle.
+    """
+
+    def __init__(self, world_db: Path, clock_file: Path) -> None:
+        self.world_db = Path(world_db)
+        self.clock_file = Path(clock_file)
+        self.urls = {n: f"http://127.0.0.1:0/{n}" for n in WORLD_SERVERS}
+
+    def start(self) -> dict[str, str]:
+        return self.urls
+
+    def set_clock(self, when: str) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
 
 
 # The default Stage-1 grader is the deterministic state-diff engine (U7).
@@ -176,6 +204,7 @@ class Runner:
         *,
         results_root: str | Path = "results",
         harness_factory: HarnessFactory = _default_harness_factory,
+        gateway_factory: Optional[GatewayFactory] = None,
         python_exe: str | None = None,
         stage1_grader: Stage1Grader = _default_stage1_grader,
         counterparty: Optional[Counterparty] = None,
@@ -187,6 +216,15 @@ class Runner:
         self.results_root = Path(results_root)
         self.harness_factory = harness_factory
         self.python_exe = python_exe or sys.executable
+        # The world gateway: the real per-track HTTP-server manager for production
+        # runs, a no-op for fake-harness test runs (so they never spawn servers).
+        # An explicit factory always wins (U5 tests inject a spy).
+        if gateway_factory is not None:
+            self.gateway_factory: GatewayFactory = gateway_factory
+        elif harness_factory is _default_harness_factory:
+            self.gateway_factory = default_gateway_factory
+        else:
+            self.gateway_factory = _NullGateway
         # Warm models before each run (prevents the MCP cold-start race). Default:
         # on for real runs, off when a custom factory is injected (tests/fakes,
         # which don't talk to a real Ollama).
@@ -284,11 +322,14 @@ class Runner:
     def _format_smoke(self, model: CandidateModel, home_dir: Path) -> FormatSmokeResult:
         world_db = home_dir / "world.db"
         WorldState.create(world_db).close()  # empty world; listing is still a tool call
-        harness = self._prepared_harness(model, home_dir / "home", world_db)
-        # expect_tools: retry past the MCP cold-start race so a genuine tool-caller
-        # isn't failed for tool-less infra runs; a true non-caller still ends at 0.
-        result = harness.run_oneshot(SMOKE_PROMPT, expect_tools=True)
-        return evaluate_format_smoke(result, harness.latest_session())
+        # The smoke runs inside the gateway context so its first turn sees the world
+        # tools too — the whole point of the persistent gateway. No per-day clock is
+        # needed here (no writes), so the servers fall back to their default clock.
+        with self._world_session(model, home_dir / "home", world_db) as (harness, _gw):
+            # expect_tools is now a cheap safety net (a server dying mid-run still
+            # surfaces); discovery itself is deterministic with servers pre-started.
+            result = harness.run_oneshot(SMOKE_PROMPT, expect_tools=True)
+            return evaluate_format_smoke(result, harness.latest_session())
 
     def _run_stage1_task(
         self, model: CandidateModel, task: Stage1Task, stage_dir: Path
@@ -329,9 +370,9 @@ class Runner:
         world.seed(task.world_seed)
         world.close()
 
-        harness = self._prepared_harness(model, task_dir / "home", world_db)
         try:
-            result = harness.run_oneshot(task.prompt, expect_tools=True)
+            with self._world_session(model, task_dir / "home", world_db) as (harness, _gw):
+                result = harness.run_oneshot(task.prompt, expect_tools=True)
         except ContextWindowError as exc:  # shouldn't reach here post-gate, but be safe
             return False, f"context error: {exc}", "", -1
 
@@ -355,29 +396,38 @@ class Runner:
         world.seed(persona.world_seed)
         world.close()
 
-        harness = self._prepared_harness(model, track_dir / "home", world_db)
         track = TrackResult(
             model_id=model.id, persona=persona.name, seed=seed,
             status="completed", trajectory_dir=str(track_dir),
         )
 
-        for day in persona.days:
-            try:
-                record = self._run_day(harness, world_db, day, persona, track_dir)
-                track.days.append(record)
-                if record.exit_code != 0:
-                    track.status = "failed"
-                    track.reason = f"day {day.day} exited {record.exit_code}"
-                    break
-            except Exception as exc:  # harness blew up — capture, don't abort matrix
-                track.days.append(
-                    DayRecord(day.day, day.date, day.user_prompt, exit_code=-1,
-                              stdout="", session=None, inbound_count=len(day.inbound),
-                              counterparty_replies=0, error=repr(exc))
-                )
-                track.status = "failed"
-                track.reason = f"day {day.day} raised {type(exc).__name__}"
-                break
+        # The persistent gateway spans the whole track: started once, kept alive
+        # across all days, torn down in a finally (the context manager). A failed
+        # gateway start degrades just this track, mirroring per-track isolation.
+        try:
+            with self._world_session(model, track_dir / "home", world_db) as (harness, gateway):
+                for day in persona.days:
+                    try:
+                        record = self._run_day(
+                            harness, gateway, world_db, day, persona, track_dir
+                        )
+                        track.days.append(record)
+                        if record.exit_code != 0:
+                            track.status = "failed"
+                            track.reason = f"day {day.day} exited {record.exit_code}"
+                            break
+                    except Exception as exc:  # harness blew up — capture, don't abort matrix
+                        track.days.append(
+                            DayRecord(day.day, day.date, day.user_prompt, exit_code=-1,
+                                      stdout="", session=None, inbound_count=len(day.inbound),
+                                      counterparty_replies=0, error=repr(exc))
+                        )
+                        track.status = "failed"
+                        track.reason = f"day {day.day} raised {type(exc).__name__}"
+                        break
+        except GatewayError as exc:  # couldn't start the world for this track
+            track.status = "failed"
+            track.reason = f"gateway start failed: {exc}"
 
         # Final out-of-band snapshot for downstream graders.
         snap_world = WorldState(world_db)
@@ -391,6 +441,7 @@ class Runner:
     def _run_day(
         self,
         harness: Harness,
+        gateway,
         world_db: Path,
         day: DayPlan,
         persona: Persona,
@@ -405,11 +456,10 @@ class Runner:
         finally:
             world.close()
 
-        # 3. Agent acts, with the day's simulated clock visible to the servers.
-        result = harness.run_oneshot(
-            day.user_prompt, extra_env={"HERMES_SIM_NOW": day.clock()},
-            expect_tools=True,
-        )
+        # 3. Agent acts, with the day's simulated clock visible to the (already
+        # running) servers via the per-track clock file the gateway stamps.
+        gateway.set_clock(day.clock())
+        result = harness.run_oneshot(day.user_prompt, expect_tools=True)
         session = harness.latest_session()
 
         # 4. Counterparty replies to anything the agent sent (partial observability).
@@ -459,17 +509,32 @@ class Runner:
 
     # --- shared --------------------------------------------------------------
 
-    def _prepared_harness(
+    @contextmanager
+    def _world_session(
         self, model: CandidateModel, home: Path, world_db: Path
-    ) -> Harness:
+    ) -> Iterator[tuple[Harness, object]]:
+        """Stand up a track's world, registered into a fresh harness, then tear down.
+
+        Starts the per-track :class:`WorldGateway` (persistent HTTP servers bound to
+        ``world_db`` + a per-track clock file), registers the servers into the home
+        **by URL**, and yields ``(harness, gateway)``. The gateway is stopped in a
+        ``finally`` so its child processes are reaped on success, exception, and
+        ``KeyboardInterrupt``. ``GatewayError`` on start propagates to the caller.
+        """
         harness = self.harness_factory(home, model)
         harness.setup()
-        # Warm the model BEFORE registering/running so its load can't race MCP
-        # server startup (which otherwise leaves the agent with no world tools).
+        # warm() is now a cheap safety net, not the cold-start fix: with servers
+        # pre-started, discovery is deterministic regardless of model load time.
         if self.warm_models:
             harness.warm()
-        register_world(harness, str(world_db), python_exe=self.python_exe)
-        return harness
+        clock_file = Path(world_db).parent / "sim_now"
+        gateway = self.gateway_factory(Path(world_db), clock_file)
+        gateway.start()
+        try:
+            register_world_urls(harness, gateway.urls)
+            yield harness, gateway
+        finally:
+            gateway.stop()
 
 
 def _safe(name: str) -> str:
