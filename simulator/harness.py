@@ -234,6 +234,15 @@ class Harness:
         env = dict(os.environ)
         env["HERMES_HOME"] = str(self.home)
         env["HERMES_ACCEPT_HOOKS"] = "1"
+        # Give the freshly-spawned mock-world MCP servers time to register before
+        # the agent's first turn, so fast API models aren't handed a tool-less
+        # turn and falsely failed. Hermes joins the discovery thread with this as
+        # an upper bound, returning as soon as discovery finishes — so a generous
+        # value costs nothing when servers boot quickly. Requires the one-line
+        # patch to hermes_cli/mcp_startup.py to honor this var (see
+        # docs/solutions/integration-issues/api-path-mcp-cold-start.md). An explicit
+        # value already in the environment wins.
+        env.setdefault("HERMES_MCP_DISCOVERY_WAIT", "20")
         if extra:
             env.update(extra)
         return env
