@@ -174,6 +174,54 @@ def test_successful_run_mentioning_phrase_does_not_raise(
     assert result.ok
 
 
+# --- remote (URL) MCP registration (U3) --------------------------------------
+
+
+class _FakeCompleted:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+
+
+def test_add_remote_mcp_server_issues_url_command(tmp_path: Path, monkeypatch):
+    h = Harness(tmp_path / "home", _model(), hermes_bin="hermes-x")
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+        return _FakeCompleted(stdout="added mockcal", returncode=0)
+
+    monkeypatch.setattr("simulator.harness.subprocess.run", fake_run)
+    res = h.add_remote_mcp_server("mockcal", "http://127.0.0.1:9001/mcp")
+
+    assert res.ok and res.stdout == "added mockcal"
+    assert captured["cmd"] == [
+        "hermes-x", "mcp", "add", "mockcal", "--url", "http://127.0.0.1:9001/mcp",
+    ]
+    # "n" to the auth prompt (unauthenticated loopback), "y" to enable all tools.
+    assert captured["input"] == "n\ny\n"
+
+
+def test_add_remote_mcp_server_surfaces_nonzero_exit(tmp_path: Path, monkeypatch):
+    h = Harness(tmp_path / "home", _model(), hermes_bin="hermes-x")
+    monkeypatch.setattr(
+        "simulator.harness.subprocess.run",
+        lambda cmd, **kw: _FakeCompleted(stderr="bad url", returncode=2),
+    )
+    res = h.add_remote_mcp_server("mockcal", "not-a-url")
+    assert not res.ok and res.exit_code == 2 and "bad url" in res.stderr
+
+
+def test_add_remote_mcp_server_returns_result_against_fake_binary(
+    tmp_path: Path, fake_hermes: str
+):
+    # End-to-end shape: the real subprocess path returns a HarnessResult.
+    h = Harness(tmp_path / "home", _model(), hermes_bin=fake_hermes)
+    h.setup()
+    res = h.add_remote_mcp_server("mockcal", "http://127.0.0.1:9001/mcp")
+    assert isinstance(res, HarnessResult) and res.ok
+
+
 # --- state.db accounting -----------------------------------------------------
 
 

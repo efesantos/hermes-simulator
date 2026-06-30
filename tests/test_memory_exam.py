@@ -70,6 +70,19 @@ def test_abstention_wrong_when_fabricated():
     assert not r.correct and r.label == "fabricated"
 
 
+def test_abstention_correct_when_declines_naming_the_topic():
+    # Regression (observed with Owl Alpha): a refusal that restates the subject
+    # ("I have no information about Theo's dentist appointment") is still a decline,
+    # not a fabrication — it asserts no concrete event details.
+    probe = _probe(DANA, PROBE_ABSTENTION)
+    r = score_probe(
+        "I have no information about a Theo or their dentist appointment in any "
+        "of my context.",
+        probe,
+    )
+    assert r.correct and r.label == "abstained"
+
+
 def test_abstention_not_fooled_by_leading_no_then_fabrication():
     # Regression: "No, ..." is not a decline; a confident fabrication must fail.
     probe = _probe(DANA, PROBE_ABSTENTION)
@@ -98,18 +111,19 @@ def test_grade_memory_exam_aggregates_and_breaks_down_by_kind():
     answers = {
         "recall_no_early_meetings": "No appointments before 9am.",
         "update_soccer_day": "Soccer is on Wednesday now.",
+        "update_swim_day": "Theo's swim class is on Monday now.",
         "abstain_theo_dentist": "I don't see any dentist appointment for Theo.",
     }
     report = grade_memory_exam(DANA, answers)
     assert report.score == 1.0
     by_kind = report.by_kind()
-    assert by_kind[PROBE_UPDATE] == 1.0
+    assert by_kind[PROBE_UPDATE] == 1.0  # both soccer and swim updates correct
     assert by_kind[PROBE_ABSTENTION] == 1.0
 
 
 def test_missing_answer_scores_zero_for_that_probe():
     answers = {"update_soccer_day": "Wednesday"}  # others unanswered
     report = grade_memory_exam(DANA, answers)
-    assert 0.0 < report.score < 1.0  # only one of three correct
+    assert 0.0 < report.score < 1.0  # only one of four correct
     abstain = next(r for r in report.results if r.kind == PROBE_ABSTENTION)
     assert not abstain.correct  # empty answer doesn't decline -> fabricated/missing

@@ -111,3 +111,15 @@ from run data and fixed (all committed/pushed, +regression tests; 144 tests gree
    off in these runs (no key wired). It rounds out the capability picture.
 4. **Persistent-MCP-gateway** (deferred in the plan) would eliminate the cold-start race at the
    source and speed runs up; the warm+retry mitigation works but costs reruns.
+
+> **Update 2026-06-30 — persistent gateway shipped.** Step 4 is done. The three
+> mock-world servers now run as long-lived `streamable-http` servers started once
+> per track (`simulator/world/gateway.py`) and registered with hermes **by URL**,
+> so tool discovery is a fast connect-to-a-running-server instead of a per-run
+> subprocess boot race. This removes the cold-start race at its source for **both**
+> the local and API fields and unblocks benchmarking the API model field
+> (GLM-5.2, Llama-3.3, Owl) without race-driven "did not call any tool"
+> eliminations. The warm + token-gate + discovery-wait mitigations are kept as
+> safety nets but are no longer load-bearing. See
+> `docs/solutions/integration-issues/api-path-mcp-cold-start.md` (Resolved) and
+> `docs/plans/2026-06-30-001-feat-persistent-mcp-gateway-plan.md`.

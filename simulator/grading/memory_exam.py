@@ -40,6 +40,10 @@ _ABSTAIN_PHRASES = (
     "cannot find", "isn't any", "aren't any", "there is no", "there's no",
     "no dentist", "not scheduled", "no upcoming", "not on your calendar",
     "no event", "not sure", "don't know", "do not know", "no idea",
+    # A refusal that names the thing it's refusing ("I have no information about
+    # Theo's dentist") is still a refusal — recognize it rather than mis-scoring
+    # it as fabrication (observed with Owl Alpha on the dana abstention probe).
+    "no information",
 )
 
 # A specific time / weekday / ISO date in an abstention answer signals the agent

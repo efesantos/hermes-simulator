@@ -39,13 +39,18 @@ class HostingProfile:
 
     ``provider`` is the key written into Hermes ``config.yaml`` under ``providers:``
     and referenced by ``model.provider``. ``base_url`` is the OpenAI-compatible
-    endpoint (Ollama exposes ``/v1``).
+    endpoint (Ollama exposes ``/v1``). ``key_env`` names the environment variable
+    holding the provider's API key — empty for local Ollama (no auth), set for
+    API providers (e.g. ``OPENROUTER_API_KEY``). It is written into ``config.yaml``
+    as ``key_env`` so Hermes reads the key from the environment at run time, and
+    the harness injects that same variable into the Hermes subprocess.
     """
 
     name: str
     hosting: Hosting
     provider: str
     base_url: str
+    key_env: str = ""
 
 
 # Local Ollama, auto-detected at localhost:11434 — the spike's working setup.
@@ -54,6 +59,19 @@ LOCAL_OLLAMA = HostingProfile(
     hosting=Hosting.LOCAL,
     provider="local-ollama",
     base_url="http://localhost:11434/v1",
+)
+
+
+# OpenRouter — one OpenAI-compatible endpoint that fronts many hosted models
+# (Owl Alpha, GLM, 70B-tier open models). Requires a bearer key in
+# ``OPENROUTER_API_KEY``. NOTE: the exact provider-block field name Hermes expects
+# (``key_env`` here) is confirmed by the Task 0 spike before the first real run.
+OPENROUTER = HostingProfile(
+    name="OpenRouter",
+    hosting=Hosting.API,
+    provider="openrouter",
+    base_url="https://openrouter.ai/api/v1",
+    key_env="OPENROUTER_API_KEY",
 )
 
 
@@ -119,10 +137,14 @@ class CompositeWeights:
     :meth:`normalized` rescales them — but keeping them on a 0..1 scale is clearest.
     """
 
-    capability: float = 0.40
-    memory: float = 0.25
+    # Memory is up-weighted to 0.35: the knowledge-update dimension is what most
+    # discriminates a life-running assistant (every model that got far in the first
+    # benchmark passed recall/preferences but failed knowledge-update). See
+    # docs/benchmark-findings-2026-06-29.md.
+    capability: float = 0.35
+    memory: float = 0.35
     reliability: float = 0.20
-    cost: float = 0.15
+    cost: float = 0.10
 
     def normalized(self) -> "CompositeWeights":
         total = self.capability + self.memory + self.reliability + self.cost
@@ -205,3 +227,78 @@ DEFAULT_CANDIDATES: tuple[CandidateModel, ...] = (
 def default_run_config() -> RunConfig:
     """The out-of-the-box run: all default candidates, 5 seeds, default weights."""
     return RunConfig(candidates=DEFAULT_CANDIDATES)
+
+
+# --- API candidate field (OpenRouter) ----------------------------------------
+# The 64K, tool-tuned tier the benchmark findings call for: models too large to
+# run locally, reached over OpenRouter. Kept SEPARATE from DEFAULT_CANDIDATES so a
+# plain ``python -m simulator`` never silently bills an API; select with
+# ``--candidates api`` (see __main__) and export OPENROUTER_API_KEY.
+#
+# Model ids and prices verified against the live OpenRouter /models API on
+# 2026-06-30. ``context_length`` is forced to the 64K floor for apples-to-apples
+# comparison with the local field, even where the model's native window is larger
+# (GLM-5.2 is ~1M; Llama-3.3 70B is 131K). NOTE: Owl Alpha was pulled from
+# OpenRouter (it was a temporary stealth model); the free-validation slot now uses
+# Llama-3.3 70B's free variant — see ``API_FREE_VALIDATION`` below.
+API_CANDIDATES: tuple[CandidateModel, ...] = (
+    # The model the user named. Verify exact $/1M against the card before a run.
+    CandidateModel(
+        id="z-ai/glm-5.2",
+        hosting_profile=OPENROUTER,
+        context_length=65_536,
+        label="GLM-5.2 (OpenRouter)",
+        price_per_1m_input=0.95,
+        price_per_1m_output=3.00,
+        family="glm",
+    ),
+    # A tool-use-capable 70B from a different family. (Hermes-3 70B was tried first
+    # but its OpenRouter providers expose no tool-use endpoint — 404 "No endpoints
+    # found that support tool use" — so it cannot run as an agent here.)
+    CandidateModel(
+        id="meta-llama/llama-3.3-70b-instruct",
+        hosting_profile=OPENROUTER,
+        context_length=65_536,
+        label="Llama-3.3 70B (OpenRouter)",
+        price_per_1m_input=0.10,
+        price_per_1m_output=0.32,
+        family="llama",
+    ),
+)
+
+
+# Free, tool-capable model for $0 end-to-end pipeline validation (the role Owl
+# Alpha filled before it was pulled). The ``:free`` variant is rate-limited, so it
+# is the ``api-free`` validation field only — not part of the paid ``api`` field.
+API_FREE_VALIDATION: CandidateModel = CandidateModel(
+    id="meta-llama/llama-3.3-70b-instruct:free",
+    hosting_profile=OPENROUTER,
+    context_length=65_536,
+    label="Llama-3.3 70B (OpenRouter, free)",
+    price_per_1m_input=0.0,
+    price_per_1m_output=0.0,
+    family="llama",
+)
+
+
+# Named candidate fields selectable from the CLI (``--candidates``).
+# ``api-free`` is the single free model — for validating the whole API pipeline
+# end-to-end at $0 before committing to a paid run.
+CANDIDATE_FIELDS: dict[str, tuple[CandidateModel, ...]] = {
+    "default": DEFAULT_CANDIDATES,
+    "local": DEFAULT_CANDIDATES,
+    "api": API_CANDIDATES,
+    "api-free": (API_FREE_VALIDATION,),
+}
+
+
+def run_config_for(field_name: str = "default") -> RunConfig:
+    """Build a RunConfig for a named candidate field (see ``CANDIDATE_FIELDS``)."""
+    try:
+        candidates = CANDIDATE_FIELDS[field_name]
+    except KeyError:
+        raise ValueError(
+            f"unknown candidate field {field_name!r}; "
+            f"choose one of {sorted(CANDIDATE_FIELDS)}"
+        ) from None
+    return RunConfig(candidates=candidates)

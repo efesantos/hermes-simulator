@@ -1,16 +1,15 @@
-"""Mock contacts MCP server (FastMCP, stdio).
+"""Mock contacts MCP server (FastMCP).
 
 Exposes the contact list (spouse, school, kids, …) backing the coordination
 tasks. Lookups are how the agent resolves a name to an email before sending mail.
+Runs over streamable-http when a port is configured (the gateway path), else stdio.
 """
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from ._server_common import make_server, run_server, world_from_argv
 
-from ._server_common import world_from_argv
-
-mcp = FastMCP("mockcontacts")
+mcp = make_server("mockcontacts")
 _world = world_from_argv()
 
 
@@ -27,4 +26,4 @@ def get_contact(name: str) -> dict | None:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    run_server(mcp)

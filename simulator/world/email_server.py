@@ -1,17 +1,16 @@
-"""Mock email MCP server (FastMCP, stdio).
+"""Mock email MCP server (FastMCP).
 
 Exposes inbox/sent tools backed by the shared world store. Registered into a
-track's HERMES_HOME via ``hermes mcp add``. The agent reaches email *only*
-through these tools; the grader reads the same store out-of-band.
+track's HERMES_HOME via ``hermes mcp add`` (by URL on the gateway path). The agent
+reaches email *only* through these tools; the grader reads the same store
+out-of-band. Runs over streamable-http when a port is configured, else stdio.
 """
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from ._server_common import make_server, run_server, sim_now, world_from_argv
 
-from ._server_common import sim_now, world_from_argv
-
-mcp = FastMCP("mockemail")
+mcp = make_server("mockemail")
 _world = world_from_argv()
 
 
@@ -50,4 +49,4 @@ def mark_read(email_id: int) -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    run_server(mcp)

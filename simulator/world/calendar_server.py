@@ -1,17 +1,16 @@
-"""Mock calendar MCP server (FastMCP, stdio).
+"""Mock calendar MCP server (FastMCP).
 
 Exposes calendar tools backed by the shared world store. ``find_conflicts`` gives
 double-booking tasks a ground-truth check the agent can use before creating an
-event on an occupied slot.
+event on an occupied slot. Runs over streamable-http when a port is configured
+(the gateway path) and falls back to stdio for ad-hoc manual use.
 """
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from ._server_common import make_server, run_server, world_from_argv
 
-from ._server_common import world_from_argv
-
-mcp = FastMCP("mockcal")
+mcp = make_server("mockcal")
 _world = world_from_argv()
 
 
@@ -62,4 +61,4 @@ def delete_event(event_id: int) -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    run_server(mcp)
