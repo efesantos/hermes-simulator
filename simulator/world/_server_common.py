@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 from mcp.server.fastmcp import FastMCP
 
@@ -98,3 +99,26 @@ def _read_clock_file(path: str) -> str:
     """Read and strip the clock file; '' if missing/empty (caller falls back)."""
     with open(path, encoding="utf-8") as fh:
         return fh.read().strip()
+
+
+def write_clock(path: str | os.PathLike[str], value: str) -> None:
+    """Atomically stamp the per-track clock file with ``value`` (an ISO time).
+
+    Written by the runner/gateway before each day so a long-lived server reflects
+    the current simulated time. The write is atomic (temp file + ``os.replace``)
+    so a concurrent :func:`sim_now` read can never observe a torn half-write.
+    """
+    target = os.fspath(path)
+    directory = os.path.dirname(target) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(value)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
