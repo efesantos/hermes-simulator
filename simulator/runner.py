@@ -303,6 +303,15 @@ class Runner:
             )
             _write_json(stage_dir / "outcome.json", outcome)
             return outcome
+        except GatewayError as exc:
+            # The world failed to start for this model — degrade just this model
+            # (as Stage 2 degrades just the track), don't crash the whole matrix.
+            outcome = Stage1Outcome(
+                model.id, eligible=False, survived=False,
+                reason=f"gateway start failed: {exc}",
+            )
+            _write_json(stage_dir / "outcome.json", outcome)
+            return outcome
         if not smoke.passed:
             outcome = Stage1Outcome(
                 model.id, eligible=False, survived=False,
@@ -382,6 +391,8 @@ class Runner:
                 result = harness.run_oneshot(task.prompt, expect_tools=True)
         except ContextWindowError as exc:  # shouldn't reach here post-gate, but be safe
             return False, f"context error: {exc}", "", -1
+        except GatewayError as exc:  # world failed to start — fail this attempt, not the matrix
+            return False, f"gateway error: {exc}", "", -1
 
         graded_world = WorldState(world_db)
         try:
@@ -526,7 +537,10 @@ class Runner:
         ``world_db`` + a per-track clock file), registers the servers into the home
         **by URL**, and yields ``(harness, gateway)``. The gateway is stopped in a
         ``finally`` so its child processes are reaped on success, exception, and
-        ``KeyboardInterrupt``. ``GatewayError`` on start propagates to the caller.
+        ``KeyboardInterrupt``. A failed start *or* a failed URL registration raises
+        :class:`GatewayError` (rather than silently running the agent tool-less,
+        the exact failure the gateway exists to prevent), which the Stage-1/Stage-2
+        callers catch to degrade just this model/track.
         """
         harness = self.harness_factory(home, model)
         harness.setup()
@@ -538,7 +552,11 @@ class Runner:
         gateway = self.gateway_factory(Path(world_db), clock_file)
         try:
             gateway.start()  # GatewayError on failure self-cleans, then propagates
-            register_world_urls(harness, gateway.urls)
+            results = register_world_urls(harness, gateway.urls)
+            failed = {n: r for n, r in results.items() if not r.ok}
+            if failed:
+                detail = "; ".join(f"{n} exit {r.exit_code}" for n, r in failed.items())
+                raise GatewayError(f"world-server registration failed: {detail}")
             yield harness, gateway
         finally:
             gateway.stop()  # idempotent — safe even if start() already tore down

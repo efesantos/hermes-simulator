@@ -181,6 +181,7 @@ class WorldGateway:
         # Hand off the registry first so a teardown error can't leave a partially
         # reaped set behind for a second stop() / __exit__ to re-terminate.
         procs, self._procs = self._procs, {}
+        self.urls = {}  # drop URLs too, so a re-start can't register stale endpoints
         self._started = False
         for proc in procs.values():
             if proc.poll() is None:
@@ -190,7 +191,14 @@ class WorldGateway:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait()  # SIGKILL is unconditional; no timeout needed
+                # Bounded wait even after SIGKILL: a child wedged in uninterruptible
+                # sleep (D-state) can't be reaped, and we must not hang teardown (and
+                # thus the whole run) on it. Give up after the timeout — at worst one
+                # orphaned process, never a stalled benchmark.
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
 
     # --- context manager (teardown on success, exception, KeyboardInterrupt) --
 

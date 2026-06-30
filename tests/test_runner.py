@@ -296,7 +296,10 @@ class _SpyGateway:
         self._events.append(("stop", id(self)))
 
 
-def _spy_runner(fake_hermes, cfg, *, fail_start=False, run_raises=False, **kw):
+def _spy_runner(
+    fake_hermes, cfg, *,
+    fail_start=False, fail_start_after=None, run_raises=False, reg_fails=False, **kw,
+):
     record: dict = {"events": [], "registered": [], "gateways": []}
 
     def hfactory(home, model):
@@ -311,13 +314,17 @@ def _spy_runner(fake_hermes, cfg, *, fail_start=False, run_raises=False, **kw):
 
         def reg(name, url):
             record["registered"].append((name, url))
+            if reg_fails:
+                return HarnessResult("", "boom", 1)  # non-ok `hermes mcp add --url`
             return orig_reg(name, url)
 
         h.run_oneshot, h.add_remote_mcp_server = run, reg
         return h
 
     def gfactory(world_db, clock_file):
-        g = _SpyGateway(world_db, clock_file, record["events"], fail_start=fail_start)
+        idx = len(record["gateways"])
+        fs = fail_start or (fail_start_after is not None and idx >= fail_start_after)
+        g = _SpyGateway(world_db, clock_file, record["events"], fail_start=fs)
         record["gateways"].append(g)
         return g
 
@@ -381,6 +388,49 @@ def test_smoke_runs_inside_the_gateway_context(tmp_path, fake_hermes, monkeypatc
     assert starts and stops and runs
     # The smoke run sits strictly between a gateway start and stop.
     assert starts[0] < runs[0] < stops[0]
+
+
+def test_stage1_smoke_gateway_failure_degrades_model_not_matrix(tmp_path, fake_hermes, monkeypatch):
+    # A gateway start failure during the Stage-1 smoke must drop just this model
+    # (like Stage 2 drops just a track), not crash the whole matrix.
+    monkeypatch.setenv("FAKE_STDOUT", "DONE")
+    runner, rec = _spy_runner(
+        fake_hermes, RunConfig(candidates=(_model(),), seeds=(0,), k=1), fail_start=True
+    )
+    out = runner.run_stage1(_model(), [], tmp_path / "run")
+    assert not out.eligible and not out.survived
+    assert "gateway start failed" in out.reason
+
+
+def test_stage1_task_gateway_failure_is_a_failed_task_not_a_crash(tmp_path, fake_hermes, monkeypatch):
+    # Smoke gateway (the 1st) succeeds; the task gateway (the 2nd) fails to start.
+    # The task is recorded as failed, the matrix keeps going.
+    monkeypatch.setenv("FAKE_STDOUT", "DONE")
+    runner, rec = _spy_runner(
+        fake_hermes, RunConfig(candidates=(_model(),), seeds=(0,), k=1),
+        fail_start_after=1, stage1_grader=lambda w, e: (True, "ok"),
+    )
+    task = Stage1Task(id="t1", prompt="do x", expected_state={})
+    out = runner.run_stage1(_model(), [task], tmp_path / "run")
+    assert out.eligible  # smoke passed (gateway 0 ok)
+    assert not out.survived  # the task failed (gateway 1 failed to start)
+    assert out.task_results[0].passed is False
+    assert "gateway error" in out.task_results[0].detail
+
+
+def test_failed_url_registration_degrades_track(tmp_path, fake_hermes, monkeypatch):
+    # The gateway starts, but `hermes mcp add --url` fails: the track must be
+    # degraded (not silently run tool-less), and the gateway still torn down.
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    runner, rec = _spy_runner(
+        fake_hermes, RunConfig(candidates=(_model(),), seeds=(0,), k=1), reg_fails=True
+    )
+    track = runner.run_stage2_track(_model(), _mini_persona(), seed=0, run_dir=tmp_path / "run")
+
+    assert track.status == "failed"
+    assert "registration failed" in track.reason
+    assert track.days == []
+    assert rec["gateways"][0].stop_count == 1  # torn down despite the failure
 
 
 # --- live (real hermes + Ollama; run with `-m live`) -------------------------

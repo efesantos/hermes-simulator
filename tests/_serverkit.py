@@ -17,12 +17,12 @@ from pathlib import Path
 
 
 def free_port() -> int:
-    """An ephemeral loopback port, released immediately (small TOCTOU window)."""
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+    """An ephemeral loopback port. Delegates to the gateway's picker so the
+    (already small) TOCTOU window matches production and stays distinct under
+    parallel test workers."""
+    from simulator.world.gateway import free_ports
+
+    return free_ports(1)[0]
 
 
 def wait_listening(port: int, timeout: float = 20.0) -> bool:
