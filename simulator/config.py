@@ -236,21 +236,12 @@ def default_run_config() -> RunConfig:
 # ``--candidates api`` (see __main__) and export OPENROUTER_API_KEY.
 #
 # Model ids and prices verified against the live OpenRouter /models API on
-# 2026-06-29. ``context_length`` is forced to the 64K floor for apples-to-apples
+# 2026-06-30. ``context_length`` is forced to the 64K floor for apples-to-apples
 # comparison with the local field, even where the model's native window is larger
-# (Owl Alpha and GLM-5.2 are ~1M; Hermes-3 70B is 131K).
+# (GLM-5.2 is ~1M; Llama-3.3 70B is 131K). NOTE: Owl Alpha was pulled from
+# OpenRouter (it was a temporary stealth model); the free-validation slot now uses
+# Llama-3.3 70B's free variant — see ``API_FREE_VALIDATION`` below.
 API_CANDIDATES: tuple[CandidateModel, ...] = (
-    # Free stealth model, agentic/tool-use, 1M native context — runs the whole
-    # API pipeline end-to-end at $0 to validate it before any paid model.
-    CandidateModel(
-        id="openrouter/owl-alpha",
-        hosting_profile=OPENROUTER,
-        context_length=65_536,
-        label="Owl Alpha (OpenRouter, free)",
-        price_per_1m_input=0.0,
-        price_per_1m_output=0.0,
-        family="owl",
-    ),
     # The model the user named. Verify exact $/1M against the card before a run.
     CandidateModel(
         id="z-ai/glm-5.2",
@@ -276,15 +267,28 @@ API_CANDIDATES: tuple[CandidateModel, ...] = (
 )
 
 
+# Free, tool-capable model for $0 end-to-end pipeline validation (the role Owl
+# Alpha filled before it was pulled). The ``:free`` variant is rate-limited, so it
+# is the ``api-free`` validation field only — not part of the paid ``api`` field.
+API_FREE_VALIDATION: CandidateModel = CandidateModel(
+    id="meta-llama/llama-3.3-70b-instruct:free",
+    hosting_profile=OPENROUTER,
+    context_length=65_536,
+    label="Llama-3.3 70B (OpenRouter, free)",
+    price_per_1m_input=0.0,
+    price_per_1m_output=0.0,
+    family="llama",
+)
+
+
 # Named candidate fields selectable from the CLI (``--candidates``).
-# ``api-free`` is just the free Owl Alpha — for validating the whole API pipeline
+# ``api-free`` is the single free model — for validating the whole API pipeline
 # end-to-end at $0 before committing to a paid run.
 CANDIDATE_FIELDS: dict[str, tuple[CandidateModel, ...]] = {
     "default": DEFAULT_CANDIDATES,
     "local": DEFAULT_CANDIDATES,
     "api": API_CANDIDATES,
-    "api-free": tuple(m for m in API_CANDIDATES if m.price_per_1m_input == 0
-                      and m.price_per_1m_output == 0),
+    "api-free": (API_FREE_VALIDATION,),
 }
 
 
