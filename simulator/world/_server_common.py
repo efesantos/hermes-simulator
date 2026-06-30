@@ -30,12 +30,14 @@ from .state import WorldState
 _FALLBACK_NOW = "2026-01-01T09:00:00"
 
 # Env vars the gateway sets when launching a server over HTTP. Absent => stdio.
-_HOST_ENV = "HERMES_MCP_HOST"
-_PORT_ENV = "HERMES_MCP_PORT"
+# Public so the gateway (which sets them) and the server (which reads them) share
+# one definition — the names are the contract between the two.
+HOST_ENV = "HERMES_MCP_HOST"
+PORT_ENV = "HERMES_MCP_PORT"
 # Path to the per-track sidecar file the runner stamps with each day's clock (U2).
-_CLOCK_FILE_ENV = "HERMES_SIM_NOW_FILE"
+CLOCK_FILE_ENV = "HERMES_SIM_NOW_FILE"
 
-_DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "127.0.0.1"
 
 
 def world_from_argv() -> WorldState:
@@ -47,7 +49,7 @@ def world_from_argv() -> WorldState:
 
 def _port_configured() -> bool:
     """True when an HTTP port is configured (and so the server runs over HTTP)."""
-    return bool(os.environ.get(_PORT_ENV))
+    return bool(os.environ.get(PORT_ENV))
 
 
 def make_server(name: str) -> FastMCP:
@@ -60,8 +62,8 @@ def make_server(name: str) -> FastMCP:
     if _port_configured():
         return FastMCP(
             name,
-            host=os.environ.get(_HOST_ENV, _DEFAULT_HOST),
-            port=int(os.environ[_PORT_ENV]),
+            host=os.environ.get(HOST_ENV, DEFAULT_HOST),
+            port=int(os.environ[PORT_ENV]),
         )
     return FastMCP(name)
 
@@ -84,21 +86,16 @@ def sim_now() -> str:
     restart. Falls back to the ``HERMES_SIM_NOW`` env var, then ``_FALLBACK_NOW``,
     so stdio/manual use keeps working.
     """
-    clock_file = os.environ.get(_CLOCK_FILE_ENV)
+    clock_file = os.environ.get(CLOCK_FILE_ENV)
     if clock_file:
         try:
-            stamped = _read_clock_file(clock_file)
-        except OSError:
+            with open(clock_file, encoding="utf-8") as fh:
+                stamped = fh.read().strip()
+        except OSError:  # not written yet / unreadable → fall back below
             stamped = ""
         if stamped:
             return stamped
     return os.environ.get("HERMES_SIM_NOW", _FALLBACK_NOW)
-
-
-def _read_clock_file(path: str) -> str:
-    """Read and strip the clock file; '' if missing/empty (caller falls back)."""
-    with open(path, encoding="utf-8") as fh:
-        return fh.read().strip()
 
 
 def write_clock(path: str | os.PathLike[str], value: str) -> None:

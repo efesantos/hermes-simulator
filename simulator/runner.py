@@ -32,7 +32,7 @@ from .config import CandidateModel, RunConfig
 from .grading.deterministic import grade_task
 from .harness import ContextWindowError, Harness, HarnessResult, SessionRow
 from .scenarios.types import Counterparty, DayPlan, Persona, Stage1Task
-from .world.gateway import GatewayError, GatewayFactory, WorldGateway
+from .world.gateway import Gateway, GatewayError, GatewayFactory, WorldGateway
 from .world.registration import WORLD_SERVERS, register_world_urls
 from .world.state import WorldState
 
@@ -65,8 +65,8 @@ class _NullGateway:
     """
 
     def __init__(self, world_db: Path, clock_file: Path) -> None:
-        self.world_db = Path(world_db)
-        self.clock_file = Path(clock_file)
+        # world_db/clock_file are part of the factory contract but unused here —
+        # nothing is spawned and no clock is stamped.
         self.urls = {n: f"http://127.0.0.1:0/{n}" for n in WORLD_SERVERS}
 
     def start(self) -> dict[str, str]:
@@ -448,7 +448,7 @@ class Runner:
     def _run_day(
         self,
         harness: Harness,
-        gateway,
+        gateway: Gateway,
         world_db: Path,
         day: DayPlan,
         persona: Persona,
@@ -519,7 +519,7 @@ class Runner:
     @contextmanager
     def _world_session(
         self, model: CandidateModel, home: Path, world_db: Path
-    ) -> Iterator[tuple[Harness, object]]:
+    ) -> Iterator[tuple[Harness, Gateway]]:
         """Stand up a track's world, registered into a fresh harness, then tear down.
 
         Starts the per-track :class:`WorldGateway` (persistent HTTP servers bound to
@@ -536,12 +536,12 @@ class Runner:
             harness.warm()
         clock_file = Path(world_db).parent / "sim_now"
         gateway = self.gateway_factory(Path(world_db), clock_file)
-        gateway.start()
         try:
+            gateway.start()  # GatewayError on failure self-cleans, then propagates
             register_world_urls(harness, gateway.urls)
             yield harness, gateway
         finally:
-            gateway.stop()
+            gateway.stop()  # idempotent — safe even if start() already tore down
 
 
 def _safe(name: str) -> str:

@@ -25,18 +25,37 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol, runtime_checkable
 
-from ._server_common import write_clock
+from ._server_common import (
+    CLOCK_FILE_ENV,
+    DEFAULT_HOST,
+    HOST_ENV,
+    PORT_ENV,
+    write_clock,
+)
 from .registration import WORLD_SERVERS
 
-DEFAULT_HOST = "127.0.0.1"
 DEFAULT_READINESS_TIMEOUT = 30.0
 
 # (n) -> n distinct free ports. Injectable so tests can force specific/occupied ports.
 PortPicker = Callable[[int], "list[int]"]
+
+
+@runtime_checkable
+class Gateway(Protocol):
+    """The lifecycle surface the runner drives — satisfied by ``WorldGateway`` and
+    by the test/fake gateways (a no-op gateway, a spy)."""
+
+    urls: dict[str, str]
+
+    def start(self) -> dict[str, str]: ...
+    def set_clock(self, when: str) -> None: ...
+    def stop(self) -> None: ...
+
+
 # (world_db, clock_file) -> a started-on-enter gateway. Injected into the runner.
-GatewayFactory = Callable[[Path, Path], "WorldGateway"]
+GatewayFactory = Callable[[Path, Path], Gateway]
 
 
 class GatewayError(RuntimeError):
@@ -60,8 +79,8 @@ def free_ports(n: int, host: str = DEFAULT_HOST) -> list[int]:
     try:
         for _ in range(n):
             s = socket.socket()
+            socks.append(s)  # own it before bind() so the finally always closes it
             s.bind((host, 0))
-            socks.append(s)
         return [s.getsockname()[1] for s in socks]
     finally:
         for s in socks:
@@ -90,7 +109,7 @@ class WorldGateway:
         self.servers = dict(servers if servers is not None else WORLD_SERVERS)
         self._port_picker = port_picker or (lambda n: free_ports(n, self.host))
         self.urls: dict[str, str] = {}
-        self._procs: list[subprocess.Popen] = []
+        self._procs: dict[str, subprocess.Popen] = {}
         self._started = False
 
     # --- lifecycle -----------------------------------------------------------
@@ -107,8 +126,7 @@ class WorldGateway:
         try:
             for (name, module), port in zip(self.servers.items(), ports):
                 self.urls[name] = self._spawn(name, module, port)
-            for name in self.servers:
-                self._await_ready(name)
+            self._await_ready()
         except BaseException:
             self.stop()
             raise
@@ -117,33 +135,42 @@ class WorldGateway:
 
     def _spawn(self, name: str, module: str, port: int) -> str:
         env = dict(os.environ)
-        env["HERMES_MCP_HOST"] = self.host
-        env["HERMES_MCP_PORT"] = str(port)
-        env["HERMES_SIM_NOW_FILE"] = str(self.clock_file)
+        env[HOST_ENV] = self.host
+        env[PORT_ENV] = str(port)
+        env[CLOCK_FILE_ENV] = str(self.clock_file)
         proc = subprocess.Popen(
             [self.python_exe, "-m", module, str(self.world_db)],
             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        self._procs.append(proc)
+        self._procs[name] = proc
         return f"http://{self.host}:{port}/mcp"
 
-    def _await_ready(self, name: str) -> None:
-        url = self.urls[name]
-        proc = self._procs[list(self.servers).index(name)]
+    def _await_ready(self) -> None:
+        """Poll all servers together until each ``/mcp`` answers, within the timeout.
+
+        Interleaved (not one-server-at-a-time) so a server that crashes on launch
+        is detected promptly rather than after waiting out an earlier server's
+        full timeout.
+        """
         deadline = time.monotonic() + self.readiness_timeout
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                raise GatewayError(
-                    f"world server {name!r} exited (code {proc.returncode}) before "
-                    f"becoming ready at {url}"
-                )
-            if _endpoint_ready(url):
-                return
-            time.sleep(0.1)
-        raise GatewayError(
-            f"world server {name!r} not ready at {url} within "
-            f"{self.readiness_timeout:.0f}s"
-        )
+        pending = set(self.servers)
+        while pending and time.monotonic() < deadline:
+            for name in list(pending):
+                proc = self._procs[name]
+                if proc.poll() is not None:
+                    raise GatewayError(
+                        f"world server {name!r} exited (code {proc.returncode}) "
+                        f"before becoming ready at {self.urls[name]}"
+                    )
+                if _endpoint_ready(self.urls[name]):
+                    pending.discard(name)
+            if pending:
+                time.sleep(0.1)
+        if pending:
+            raise GatewayError(
+                f"world servers {sorted(pending)} not ready within "
+                f"{self.readiness_timeout:.0f}s"
+            )
 
     def set_clock(self, when: str) -> None:
         """Stamp the per-track clock file so the servers reflect today's sim time."""
@@ -151,17 +178,19 @@ class WorldGateway:
 
     def stop(self) -> None:
         """Terminate and reap every server. Idempotent; safe to call repeatedly."""
-        for proc in self._procs:
+        # Hand off the registry first so a teardown error can't leave a partially
+        # reaped set behind for a second stop() / __exit__ to re-terminate.
+        procs, self._procs = self._procs, {}
+        self._started = False
+        for proc in procs.values():
             if proc.poll() is None:
                 proc.terminate()
-        for proc in self._procs:
+        for proc in procs.values():
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait(timeout=10)
-        self._procs = []
-        self._started = False
+                proc.wait()  # SIGKILL is unconditional; no timeout needed
 
     # --- context manager (teardown on success, exception, KeyboardInterrupt) --
 
@@ -183,8 +212,3 @@ def _endpoint_ready(url: str) -> bool:
         return True  # e.g. 406 Not Acceptable for a plain GET — it's serving
     except (urllib.error.URLError, OSError):
         return False
-
-
-def default_gateway_factory(world_db: Path, clock_file: Path) -> WorldGateway:
-    """The real factory the runner uses; tests inject a fake of the same shape."""
-    return WorldGateway(world_db, clock_file)

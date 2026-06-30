@@ -13,12 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from simulator.world.gateway import (
-    GatewayError,
-    WorldGateway,
-    default_gateway_factory,
-    free_ports,
-)
+from simulator.world.gateway import GatewayError, WorldGateway, free_ports
 from simulator.world.state import WorldState
 
 from ._serverkit import call_tool, wait_listening
@@ -48,7 +43,7 @@ def test_gateway_starts_three_reachable_servers_and_tears_down(tmp_path: Path):
 
     with WorldGateway(world_db, clock) as gw:
         assert set(gw.urls) == {"mockcal", "mockemail", "mockcontacts"}
-        procs = list(gw._procs)
+        procs = list(gw._procs.values())
         assert len(procs) == 3
         # Each URL is reachable; the calendar one serves the seeded world.
         for url in gw.urls.values():
@@ -69,9 +64,11 @@ def test_set_clock_stamps_the_clock_file(tmp_path: Path):
     assert clock.read_text().strip() == "2026-07-02T09:00:00"
 
 
-def test_default_factory_builds_a_gateway(tmp_path: Path):
-    gw = default_gateway_factory(tmp_path / "world.db", tmp_path / "sim_now")
-    assert isinstance(gw, WorldGateway)
+def test_world_gateway_satisfies_the_gateway_protocol(tmp_path: Path):
+    from simulator.world.gateway import Gateway
+
+    gw = WorldGateway(tmp_path / "world.db", tmp_path / "sim_now")
+    assert isinstance(gw, Gateway)  # runtime-checkable structural match
 
 
 # --- readiness failure & teardown of already-started -------------------------
@@ -99,7 +96,7 @@ def test_readiness_timeout_raises_and_tears_down_started(tmp_path: Path):
             gw.start()
         # The already-started "a" server was torn down (its port is free again).
         assert not _port_listening(good)
-        assert gw._procs == []
+        assert gw._procs == {}
     finally:
         blocker.close()
 
@@ -114,7 +111,7 @@ def test_exception_in_context_still_terminates_all_children(tmp_path: Path):
     procs = []
     with pytest.raises(RuntimeError, match="boom"):
         with WorldGateway(world_db, clock) as gw:
-            procs = list(gw._procs)
+            procs = list(gw._procs.values())
             assert all(p.poll() is None for p in procs)  # all alive mid-context
             raise RuntimeError("boom")
 
