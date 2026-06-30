@@ -361,6 +361,31 @@ class Harness:
             exit_code=completed.returncode,
         )
 
+    def add_remote_mcp_server(self, name: str, url: str) -> HarnessResult:
+        """Register a remote (URL-transport) MCP server into this home.
+
+        Used for the persistent world gateway: the three mock-world servers are
+        long-lived HTTP servers, so Hermes connects to them by URL
+        (``hermes mcp add <name> --url <url>``) instead of spawning a stdio
+        subprocess per run. Auto-confirms the enable prompt as the stdio variant
+        does. A non-zero hermes exit is surfaced on the returned ``HarnessResult``,
+        not swallowed.
+        """
+        completed = subprocess.run(
+            [self.hermes_bin, "mcp", "add", name, "--url", url],
+            env=self._env(),
+            input="y\n",
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+        )
+        return HarnessResult(
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            exit_code=completed.returncode,
+        )
+
     def reset_memory(self) -> None:
         """Wipe this home's memory (``hermes memory reset``).
 
