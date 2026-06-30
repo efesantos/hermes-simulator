@@ -32,7 +32,7 @@ from .config import CandidateModel, RunConfig
 from .grading.deterministic import grade_task
 from .harness import ContextWindowError, Harness, HarnessResult, SessionRow
 from .scenarios.types import Counterparty, DayPlan, Persona, Stage1Task
-from .world.gateway import GatewayError, GatewayFactory, default_gateway_factory
+from .world.gateway import GatewayError, GatewayFactory, WorldGateway
 from .world.registration import WORLD_SERVERS, register_world_urls
 from .world.state import WorldState
 
@@ -222,7 +222,14 @@ class Runner:
         if gateway_factory is not None:
             self.gateway_factory: GatewayFactory = gateway_factory
         elif harness_factory is _default_harness_factory:
-            self.gateway_factory = default_gateway_factory
+            # Launch the world servers under the runner's interpreter (the venv
+            # python that can import `simulator` + the mcp SDK), matching the old
+            # stdio registration's use of python_exe.
+            self.gateway_factory = (
+                lambda world_db, clock_file: WorldGateway(
+                    world_db, clock_file, python_exe=self.python_exe
+                )
+            )
         else:
             self.gateway_factory = _NullGateway
         # Warm models before each run (prevents the MCP cold-start race). Default:
