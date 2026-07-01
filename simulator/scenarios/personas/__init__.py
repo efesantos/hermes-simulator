@@ -8,9 +8,10 @@ is the entry point for the runner and graders.
 from __future__ import annotations
 
 from ..types import Persona
+from .amsterdam import PERSONA as AMSTERDAM
 from .dana import PERSONA as DANA
 
-ALL_PERSONAS: dict[str, Persona] = {DANA.name: DANA}
+ALL_PERSONAS: dict[str, Persona] = {DANA.name: DANA, AMSTERDAM.name: AMSTERDAM}
 
 
 def get_persona(name: str) -> Persona:
