@@ -9,10 +9,10 @@ from simulator.metrics import ModelRollup
 from simulator.report import build_report, render_table
 
 
-def _roll(model_id, *, cap, mem, rel, cost, name=None):
+def _roll(model_id, *, cap, mem, rel, cost, latency=0.0, name=None):
     return ModelRollup(model_id=model_id, display_name=name or model_id, eliminated=False,
                        capability=cap, memory=mem, reliability=rel, cost_usd=cost,
-                       tokens=10000, n_tracks=3)
+                       latency_s=latency, tokens=10000, n_tracks=3)
 
 
 def _eliminated(model_id, reason):
@@ -95,3 +95,150 @@ def test_full_small_matrix_renders_ranked_report():
     assert len(report.eliminated) == 2
     text = render_table(report)
     assert "Composite" in text and "Eliminated in Stage 1:" in text
+
+
+# --- speed dimension (U4) ----------------------------------------------------
+
+
+def test_normalized_sums_across_five_dimensions():
+    w = CompositeWeights(0.30, 0.30, 0.15, 0.15, 0.10).normalized()
+    assert w.capability + w.memory + w.reliability + w.cost + w.speed == pytest.approx(1.0)
+
+
+def test_zero_sum_weights_still_raise():
+    with pytest.raises(ValueError):
+        CompositeWeights(0, 0, 0, 0, 0).normalized()
+
+
+def test_default_weights_reproduce_prior_four_dimension_ranking():
+    # Back-compat guard: the DEFAULT weighting (speed 0.0) must produce the same
+    # composites/order as an explicit 4-dimension weighting — no ranking shift.
+    rolls = [
+        _roll("a", cap=0.9, mem=0.8, rel=0.7, cost=0.02, latency=12.0),
+        _roll("b", cap=0.6, mem=0.6, rel=0.6, cost=0.01, latency=2.0),
+        _roll("c", cap=0.8, mem=0.9, rel=0.8, cost=0.05, latency=8.0),
+    ]
+    default = build_report(rolls, CompositeWeights())  # speed defaults to 0.0
+    explicit_4d = build_report(rolls, CompositeWeights(0.35, 0.35, 0.20, 0.10))
+    assert [r.model_id for r in default.ranked] == [r.model_id for r in explicit_4d.ranked]
+    for d, e in zip(default.ranked, explicit_4d.ranked):
+        assert d.composite == pytest.approx(e.composite)
+
+
+def test_speed_score_favors_faster_model():
+    slow = _roll("slow", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=16.0)
+    fast = _roll("fast", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=2.0)
+    # Identical on everything but latency; a speed-only weighting ranks the faster first.
+    report = build_report([slow, fast], CompositeWeights(0, 0, 0, 0, 1))
+    assert report.ranked[0].model_id == "fast"
+    assert report.ranked[0].composite > report.ranked[1].composite
+
+
+def test_render_table_has_speed_column():
+    rolls = [_roll("good", cap=0.8, mem=0.7, rel=0.9, cost=0.02, latency=5.5, name="Good Model")]
+    text = render_table(build_report(rolls, CompositeWeights()))
+    assert "Speed" in text
+    assert "5.5" in text  # the latency value is rendered
+
+
+# --- labelled picks + multi-weighting (U5) -----------------------------------
+
+from simulator.report import (  # noqa: E402
+    NAMED_WEIGHTINGS,
+    Picks,
+    pick_labels,
+    render_picks,
+    render_weightings,
+)
+
+
+def _rows(*rolls):
+    return build_report(list(rolls), CompositeWeights()).ranked
+
+
+def test_best_accuracy_ignores_floor():
+    # High cap+mem but reliability below floor — still wins best-accuracy.
+    hot = _roll("hot", cap=0.95, mem=0.95, rel=0.10, cost=0.05)
+    safe = _roll("safe", cap=0.7, mem=0.7, rel=0.99, cost=0.05)
+    picks = pick_labels(_rows(hot, safe))
+    assert picks.best_accuracy.model_id == "hot"
+
+
+def test_value_and_cheapest_exclude_floor_failers():
+    below = _roll("below", cap=0.55, mem=0.4, rel=0.5, cost=0.001)  # fails floor, cheapest
+    ok = _roll("ok", cap=0.8, mem=0.7, rel=0.9, cost=0.05)
+    picks = pick_labels(_rows(below, ok))
+    assert picks.n_floor_passers == 1
+    assert picks.cheapest_viable.model_id == "ok"  # not 'below', despite it being cheaper
+    assert picks.best_value.model_id == "ok"
+
+
+def test_cheapest_viable_vs_best_value_differ():
+    # cheap_ok: passes floor, cheapest. rich_ok: passes floor, best accuracy-per-dollar.
+    cheap_ok = _roll("cheap_ok", cap=0.62, mem=0.52, rel=0.80, cost=0.010)
+    rich_ok = _roll("rich_ok", cap=0.95, mem=0.95, rel=0.95, cost=0.012)
+    picks = pick_labels(_rows(cheap_ok, rich_ok))
+    assert picks.cheapest_viable.model_id == "cheap_ok"
+    assert picks.best_value.model_id == "rich_ok"  # (0.95+0.95)/0.012 > (0.62+0.52)/0.010
+
+
+def test_zero_cost_guard_in_best_value():
+    free = _roll("free", cap=0.9, mem=0.9, rel=0.9, cost=0.0)  # $0 smoke-style track
+    paid = _roll("paid", cap=0.7, mem=0.6, rel=0.8, cost=0.02)
+    picks = pick_labels(_rows(free, paid))  # must not raise ZeroDivisionError
+    # $0 row is excluded from BOTH cost-based picks (consistency): a free validation
+    # model is never crowned best-value or cheapest-viable.
+    assert picks.best_value.model_id == "paid"
+    assert picks.cheapest_viable.model_id == "paid"
+
+
+def test_all_costed_picks_none_when_only_free_passers():
+    # Only floor-passers are $0 — cost-based picks are both None, and render notes it.
+    free1 = _roll("free1", cap=0.9, mem=0.9, rel=0.9, cost=0.0)
+    free2 = _roll("free2", cap=0.8, mem=0.7, rel=0.85, cost=0.0)
+    picks = pick_labels(_rows(free1, free2))
+    assert picks.n_floor_passers == 2
+    assert picks.best_value is None and picks.cheapest_viable is None
+    assert picks.best_accuracy is not None
+    assert "positive per-task cost" in render_picks(picks)
+
+
+def test_unmeasured_latency_scores_worst_not_best():
+    # A model with missing latency (0.0) must NOT be crowned fastest over a real one.
+    missing = _roll("missing", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=0.0)
+    real_fast = _roll("real_fast", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=2.0)
+    report = build_report([missing, real_fast], CompositeWeights(0, 0, 0, 0, 1))
+    assert report.ranked[0].model_id == "real_fast"  # measured-fast beats missing-data
+    # When every latency is missing, the speed dimension is non-discriminating.
+    m2 = _roll("m2", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=0.0)
+    both_missing = build_report([missing, m2], CompositeWeights(0, 0, 0, 0, 1))
+    assert both_missing.ranked[0].composite == pytest.approx(both_missing.ranked[1].composite)
+
+
+def test_empty_floor_passers_reports_none():
+    a = _roll("a", cap=0.3, mem=0.3, rel=0.3, cost=0.01)
+    b = _roll("b", cap=0.4, mem=0.2, rel=0.2, cost=0.02)
+    picks = pick_labels(_rows(a, b))
+    assert picks.n_floor_passers == 0
+    assert picks.best_value is None and picks.cheapest_viable is None
+    assert picks.best_accuracy is not None  # accuracy pick ignores the floor
+    assert "(none)" in render_picks(picks)
+
+
+def test_named_weightings_reorder_top_rank():
+    # strong+pricey+slow vs weak+cheap+fast: memory_heavy favors strong, cost_forward the cheap one.
+    strong = _roll("strong", cap=0.95, mem=0.95, rel=0.95, cost=0.20, latency=16.0)
+    thrifty = _roll("thrifty", cap=0.62, mem=0.55, rel=0.80, cost=0.005, latency=2.0)
+    text = render_weightings([strong, thrifty])
+    assert "weighting: memory_heavy" in text
+    assert "weighting: cost_forward" in text
+    mh = build_report([strong, thrifty], NAMED_WEIGHTINGS["memory_heavy"]).ranked[0].model_id
+    cf = build_report([strong, thrifty], NAMED_WEIGHTINGS["cost_forward"]).ranked[0].model_id
+    assert mh == "strong"
+    assert cf == "thrifty"
+
+
+def test_render_weightings_includes_picks_once():
+    ok = _roll("ok", cap=0.8, mem=0.7, rel=0.9, cost=0.05)
+    text = render_weightings([ok])
+    assert text.count("Picks (no single winner") == 1

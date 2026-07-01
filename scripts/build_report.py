@@ -15,8 +15,7 @@ import sys
 from pathlib import Path
 
 from simulator.config import (
-    API_CANDIDATES,
-    DEFAULT_CANDIDATES,
+    CANDIDATE_FIELDS,
     CandidateModel,
     LOCAL_OLLAMA,
     RunConfig,
@@ -30,7 +29,7 @@ from simulator.metrics import (
     rollup,
     tokens_to_complete,
 )
-from simulator.report import build_report, render_table
+from simulator.report import render_weightings
 from simulator.scenarios.personas import ALL_PERSONAS
 
 
@@ -44,11 +43,15 @@ def _session_from_dict(d: dict) -> SessionRow:
 
 
 def _model_for(model_id: str) -> CandidateModel:
-    # Search both fields so API candidates keep their real provider + prices when
-    # a report is rebuilt from disk (else an API model is mis-costed as local $0).
-    for c in (*DEFAULT_CANDIDATES, *API_CANDIDATES):
-        if c.id == model_id:
-            return c
+    # Search EVERY known candidate field so an API model keeps its real provider +
+    # prices when a report is rebuilt from disk. Missing a field here silently
+    # mis-costs its models as local $0 (normalize_cost takes the LOCAL branch and
+    # ignores metered dollars) — which is why we iterate CANDIDATE_FIELDS rather
+    # than hard-coding a subset that new fields (e.g. api-family) would fall out of.
+    for field in CANDIDATE_FIELDS.values():
+        for c in field:
+            if c.id == model_id:
+                return c
     # Unknown id (e.g. an ad-hoc variant): synthesize a local 64K candidate.
     return CandidateModel(id=model_id, hosting_profile=LOCAL_OLLAMA, context_length=65_536)
 
@@ -64,7 +67,12 @@ def main() -> None:
     # fails regardless of how many seeds completed on disk. The authoritative
     # reliability (pass^k) comes from a single live run; this rebuilds whatever
     # exists. seeds is generous purely to satisfy the len(seeds) >= k invariant.
-    cfg = RunConfig(candidates=DEFAULT_CANDIDATES, seeds=(0, 1, 2, 3, 4), k=1)
+    # candidates spans EVERY known field (deduped by id) so display names resolve
+    # for whichever field the run used (default/api/api-family/...).
+    all_candidates = tuple(
+        {c.id: c for field in CANDIDATE_FIELDS.values() for c in field}.values()
+    )
+    cfg = RunConfig(candidates=all_candidates, seeds=(0, 1, 2, 3, 4), k=1)
 
     # Stage-1 outcomes -> eliminated map.
     eliminated: dict[str, str] = {}
@@ -112,11 +120,13 @@ def main() -> None:
             ))
 
     rollups = rollup(evaluations, cfg, eliminated=eliminated)
-    report = build_report(rollups, cfg.weights)
     print(f"=== report rebuilt from {run_dir} ===")
     print(f"(survivors with tracks: {len({e.model_id for e in evaluations})}, "
           f"eliminated: {len(eliminated)})\n")
-    print(render_table(report))
+    # Full output: the ranked table under each named weighting + the three picks
+    # ("show all, no single winner"). build_report costs api-family models correctly
+    # now that _model_for searches every field.
+    print(render_weightings(rollups))
 
 
 if __name__ == "__main__":

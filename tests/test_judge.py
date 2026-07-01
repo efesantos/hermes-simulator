@@ -125,3 +125,61 @@ def test_compare_also_enforces_cross_family():
     judge = Judge(CFG, chat_fn=lambda *a, **k: json.dumps({"winner": "TIE"}))
     with pytest.raises(JudgeFamilyError):
         judge.compare("x", "y", candidate_family="anthropic")
+
+
+# --- persona-scoped multilingual rubric (KTD7) -------------------------------
+
+
+def test_rubric_for_persona_maps_amsterdam_to_multilingual():
+    from simulator.grading.judge import (
+        DEFAULT_RUBRIC,
+        MULTILINGUAL_RUBRIC,
+        rubric_for_persona,
+    )
+    assert rubric_for_persona("amsterdam") is MULTILINGUAL_RUBRIC
+    assert "multilingual" in rubric_for_persona("amsterdam")
+    # dana (and any other persona) keeps the default rubric — comparability preserved.
+    assert rubric_for_persona("dana") is DEFAULT_RUBRIC
+    assert "multilingual" not in rubric_for_persona("dana")
+
+
+def test_default_rubric_untouched_by_multilingual_addition():
+    from simulator.grading.judge import DEFAULT_RUBRIC
+    assert "multilingual" not in DEFAULT_RUBRIC  # dana's dimensions are unchanged
+
+
+def test_score_rubric_override_adds_multilingual_dimension():
+    from simulator.grading.judge import MULTILINGUAL_RUBRIC
+    scores = {"tone": 4, "proactivity": 3, "memory_surfacing": 5, "multilingual": 2}
+    judge = Judge(CFG, chat_fn=_scoring_chat(scores))
+    v = judge.score("t", candidate_family="qwen", rubric=MULTILINGUAL_RUBRIC)
+    assert set(v.scores) == set(MULTILINGUAL_RUBRIC)
+    assert v.scores["multilingual"] == 2
+
+
+def test_score_override_surfaces_multilingual_in_prompt():
+    from simulator.grading.judge import MULTILINGUAL_RUBRIC
+    captured = {}
+
+    def chat(messages, *, temperature):
+        captured["system"] = messages[0]["content"]
+        return json.dumps({"scores": {d: 3 for d in MULTILINGUAL_RUBRIC}})
+
+    judge = Judge(CFG, chat_fn=chat)
+    judge.score("t", candidate_family="qwen", rubric=MULTILINGUAL_RUBRIC)
+    assert "multilingual" in captured["system"]
+
+
+def test_score_without_override_uses_default_rubric():
+    # A judge built with the default rubric, scored without override, must NOT emit
+    # a multilingual dimension (this is what a dana track sees).
+    captured = {}
+
+    def chat(messages, *, temperature):
+        captured["system"] = messages[0]["content"]
+        return json.dumps({"scores": {"tone": 3, "proactivity": 3, "memory_surfacing": 3}})
+
+    judge = Judge(CFG, chat_fn=chat)
+    v = judge.score("t", candidate_family="qwen")
+    assert "multilingual" not in captured["system"]
+    assert "multilingual" not in v.scores

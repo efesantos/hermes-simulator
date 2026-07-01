@@ -7,9 +7,10 @@ present regardless of the weights — the weights only decide the composite and 
 ranking. Eliminated models are listed with their Stage-1 reason, never dropped.
 
 Composite normalization: capability/memory/reliability are already 0..1 (higher
-is better) and used directly. Cost (dollars, lower is better) is min-max inverted
-across the ranked models so the cheapest scores 1.0 and the priciest 0.0. The
-composite is the weight-normalized sum.
+is better) and used directly. Cost (dollars, lower is better) and speed (latency
+seconds, lower is better) are each min-max inverted across the ranked models so
+the cheapest / fastest scores 1.0 and the priciest / slowest 0.0. The composite
+is the weight-normalized sum.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ class ReportRow:
     reliability: float
     cost_usd: float
     tokens: float
+    latency_s: float
     composite: Optional[float]  # None for eliminated models
     rank: Optional[int]  # None for eliminated models
 
@@ -50,14 +52,47 @@ class Report:
         return [r for r in self.rows if r.eliminated]
 
 
-def _cost_scores(costs: list[float]) -> list[float]:
-    """Min-max invert cost to a 0..1 score (cheapest=1). Degenerate range -> all 1."""
-    if not costs:
+def _invert_min_max(values: list[float]) -> list[float]:
+    """Min-max invert to a 0..1 score (lowest=1, highest=0). Degenerate range -> all 1.
+
+    For cost, ``0`` legitimately means "cheapest" (a free model), so it maps to 1.0.
+    """
+    if not values:
         return []
-    lo, hi = min(costs), max(costs)
+    lo, hi = min(values), max(values)
     if hi == lo:
-        return [1.0 for _ in costs]
-    return [(hi - c) / (hi - lo) for c in costs]
+        return [1.0 for _ in values]
+    return [(hi - v) / (hi - lo) for v in values]
+
+
+_cost_scores = _invert_min_max
+
+
+def _speed_scores(latencies: list[float]) -> list[float]:
+    """Speed score (fastest=1.0), like cost inversion but **missing-data-aware**.
+
+    Unlike cost (where ``0`` means free = best), a latency of ``0`` means the timing
+    was never measured — e.g. timestamps absent on the disk-rebuild/stitch path. Such
+    a track must NOT be rewarded as "instant": unmeasured (``<= 0``) latency scores
+    ``0.0`` (worst), and the min-max range is taken over the positive latencies only.
+    When nothing has a measured latency, the dimension is non-discriminating (all 1.0),
+    mirroring the degenerate cost case.
+    """
+    if not latencies:
+        return []
+    positive = [v for v in latencies if v > 0]
+    if not positive:
+        return [1.0 for _ in latencies]
+    lo, hi = min(positive), max(positive)
+    out: list[float] = []
+    for v in latencies:
+        if v <= 0:
+            out.append(0.0)  # unmeasured — never scored as fastest
+        elif hi == lo:
+            out.append(1.0)
+        else:
+            out.append((hi - v) / (hi - lo))
+    return out
 
 
 def build_report(rollups: list[ModelRollup], weights: CompositeWeights) -> Report:
@@ -67,13 +102,15 @@ def build_report(rollups: list[ModelRollup], weights: CompositeWeights) -> Repor
     eliminated = [r for r in rollups if r.eliminated]
 
     cost_scores = _cost_scores([r.cost_usd for r in survivors])
+    speed_scores = _speed_scores([r.latency_s for r in survivors])
     scored: list[tuple[ModelRollup, float]] = []
-    for r, cost_score in zip(survivors, cost_scores):
+    for r, cost_score, speed_score in zip(survivors, cost_scores, speed_scores):
         composite = (
             w.capability * r.capability
             + w.memory * r.memory
             + w.reliability * r.reliability
             + w.cost * cost_score
+            + w.speed * speed_score
         )
         scored.append((r, composite))
 
@@ -84,13 +121,15 @@ def build_report(rollups: list[ModelRollup], weights: CompositeWeights) -> Repor
         rows.append(ReportRow(
             model_id=r.model_id, display_name=r.display_name, eliminated=False, reason="",
             capability=r.capability, memory=r.memory, reliability=r.reliability,
-            cost_usd=r.cost_usd, tokens=r.tokens, composite=composite, rank=rank,
+            cost_usd=r.cost_usd, tokens=r.tokens, latency_s=r.latency_s,
+            composite=composite, rank=rank,
         ))
     for r in eliminated:
         rows.append(ReportRow(
             model_id=r.model_id, display_name=r.display_name, eliminated=True, reason=r.reason,
             capability=r.capability, memory=r.memory, reliability=r.reliability,
-            cost_usd=r.cost_usd, tokens=r.tokens, composite=None, rank=None,
+            cost_usd=r.cost_usd, tokens=r.tokens, latency_s=r.latency_s,
+            composite=None, rank=None,
         ))
     return Report(rows=rows, weights=w)
 
@@ -99,14 +138,15 @@ def render_table(report: Report) -> str:
     """Render the report as a fixed-width text table."""
     header = (
         f"{'#':>2}  {'Model':<22} {'Cap':>5} {'Mem':>5} {'Rel':>5} "
-        f"{'Cost$':>8} {'Tokens':>9} {'Composite':>9}"
+        f"{'Cost$':>8} {'Speed(s)':>9} {'Tokens':>9} {'Composite':>9}"
     )
     lines = [header, "-" * len(header)]
     for row in report.ranked:
         lines.append(
             f"{row.rank:>2}  {row.display_name:<22} "
             f"{row.capability:>5.2f} {row.memory:>5.2f} {row.reliability:>5.2f} "
-            f"{row.cost_usd:>8.4f} {row.tokens:>9.0f} {row.composite:>9.3f}"
+            f"{row.cost_usd:>8.4f} {row.latency_s:>9.1f} {row.tokens:>9.0f} "
+            f"{row.composite:>9.3f}"
         )
     if report.eliminated:
         lines.append("")
@@ -114,3 +154,119 @@ def render_table(report: Report) -> str:
         for row in report.eliminated:
             lines.append(f"  - {row.display_name}: {row.reason}")
     return "\n".join(lines)
+
+
+# --- labelled picks (R6) -----------------------------------------------------
+# The eval deliberately crowns no single composite winner; instead it surfaces
+# three labelled picks against a viability floor, plus the full table under more
+# than one weighting, so the user makes the accuracy-vs-cost trade-off themselves.
+
+# Viability floor gating best-value and cheapest-viable (KTD3). Tunable.
+CAP_FLOOR = 0.60
+MEM_FLOOR = 0.50
+REL_FLOOR = 0.75
+
+
+def _passes_floor(row: ReportRow) -> bool:
+    return (row.capability >= CAP_FLOOR
+            and row.memory >= MEM_FLOOR
+            and row.reliability >= REL_FLOOR)
+
+
+@dataclass(frozen=True)
+class Picks:
+    """Three labelled recommendations derived from the per-dimension rows."""
+
+    best_accuracy: Optional[ReportRow]  # max capability+memory, floor ignored
+    best_value: Optional[ReportRow]  # max (cap+mem)/cost among floor-passers ($>0)
+    cheapest_viable: Optional[ReportRow]  # min cost among floor-passers
+    n_floor_passers: int
+
+
+def pick_labels(rows: list[ReportRow]) -> Picks:
+    """Compute the three labelled picks from the (survivor) rows.
+
+    Picks are weighting-independent — they read raw dimensions and cost, not the
+    composite — so any built report's ``ranked`` rows can feed this. best-value
+    guards ``cost_usd <= 0`` (the api-free $0 smoke and any metered-$0 track would
+    otherwise divide by zero), excluding such rows from the value ratio.
+    """
+    survivors = [r for r in rows if not r.eliminated]
+    if not survivors:
+        return Picks(None, None, None, 0)
+
+    best_accuracy = max(survivors, key=lambda r: r.capability + r.memory)
+    passers = [r for r in survivors if _passes_floor(r)]
+
+    # Both cost-based picks use the same eligibility: a floor-passer with a positive
+    # per-task cost. A $0 track (the api-free validation model, or a metered-$0 run)
+    # is a validation artifact, not a costed recommendation — excluding it from both
+    # keeps best_value and cheapest_viable consistent (best_value also can't divide
+    # by zero) rather than crowning a free model "cheapest viable" while best_value
+    # is blank.
+    costed_passers = [r for r in passers if r.cost_usd > 0]
+    best_value = (max(costed_passers, key=lambda r: (r.capability + r.memory) / r.cost_usd)
+                  if costed_passers else None)
+    cheapest_viable = min(costed_passers, key=lambda r: r.cost_usd) if costed_passers else None
+
+    return Picks(best_accuracy, best_value, cheapest_viable, len(passers))
+
+
+def render_picks(picks: Picks) -> str:
+    """Human-readable summary of the three picks."""
+    def _line(label: str, row: Optional[ReportRow]) -> str:
+        if row is None:
+            return f"  {label:<16} (none)"
+        return (f"  {label:<16} {row.display_name}  "
+                f"(cap {row.capability:.2f} / mem {row.memory:.2f} / "
+                f"rel {row.reliability:.2f} / ${row.cost_usd:.4f}/task / "
+                f"{row.latency_s:.1f}s)")
+
+    lines = [
+        "Picks (no single winner — pick by your priority):",
+        f"  floor: cap>={CAP_FLOOR:.2f}, mem>={MEM_FLOOR:.2f}, rel>={REL_FLOOR:.2f} "
+        f"— {picks.n_floor_passers} model(s) clear it",
+        _line("best accuracy", picks.best_accuracy),
+        _line("best value", picks.best_value),
+        _line("cheapest viable", picks.cheapest_viable),
+    ]
+    if picks.n_floor_passers == 0:
+        lines.append("  (no model clears the floor — best-value/cheapest-viable are (none))")
+    elif picks.cheapest_viable is None:
+        lines.append("  (floor-passers exist but none has a positive per-task cost — "
+                     "cost-based picks omitted; likely a $0 validation run)")
+    return "\n".join(lines)
+
+
+# --- multiple named weightings (R6) ------------------------------------------
+# memory_heavy is the unchanged default; cost_forward raises cost+speed and lowers
+# memory. This named pair is the ONLY home for the speed/cost rebalance — the
+# global default (CompositeWeights()) stays memory-heavy with speed 0.0.
+NAMED_WEIGHTINGS: dict[str, CompositeWeights] = {
+    "memory_heavy": CompositeWeights(),  # 0.35 / 0.35 / 0.20 / 0.10 / 0.0
+    "cost_forward": CompositeWeights(
+        capability=0.25, memory=0.20, reliability=0.15, cost=0.25, speed=0.15
+    ),
+}
+
+
+def render_weightings(
+    rollups: list[ModelRollup],
+    weightings: Optional[dict[str, CompositeWeights]] = None,
+) -> str:
+    """Render the ranked table once per named weighting, plus the picks once.
+
+    Picks are weighting-independent, so they are computed from the first weighting's
+    rows and shown a single time after the tables.
+    """
+    weightings = weightings or NAMED_WEIGHTINGS
+    blocks: list[str] = []
+    first_report: Optional[Report] = None
+    for name, weights in weightings.items():
+        report = build_report(rollups, weights)
+        if first_report is None:
+            first_report = report
+        blocks.append(f"== weighting: {name} ==\n{render_table(report)}")
+    if first_report is not None:
+        blocks.append(render_picks(pick_labels(first_report.rows)))
+    return "\n\n".join(blocks)
