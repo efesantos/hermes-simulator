@@ -248,7 +248,7 @@ API_CANDIDATES: tuple[CandidateModel, ...] = (
         hosting_profile=OPENROUTER,
         context_length=65_536,
         label="GLM-5.2 (OpenRouter)",
-        price_per_1m_input=0.95,
+        price_per_1m_input=0.93,  # drifted from 0.95; re-verified live 2026-07-01
         price_per_1m_output=3.00,
         family="glm",
     ),
@@ -288,6 +288,66 @@ API_CANDIDATES: tuple[CandidateModel, ...] = (
 )
 
 
+# --- Expanded API field for the cost-forward, latency-aware eval (api-family) --
+# The user's real model (Qwen 3.7 Plus) has never been benchmarked; this field
+# adds it plus six peers chosen for the cost question, and keeps the four
+# API_CANDIDATES above for continuity so a single ``--candidates api-family`` run
+# compares everything. Prices $/1M in/out, tool-support both verified against the
+# live OpenRouter /models API on 2026-07-01 (re-verify before a paid run — prices
+# drift; e.g. Gemini 3.5 Flash moved to 1.50/9.00). Owl Alpha is NOT included: it
+# was pulled from OpenRouter again and is unavailable as of 2026-07-01 (excluded,
+# not failed). Every ``family`` is set explicitly — prefix inference would produce
+# e.g. "deepseekdeepseek" for "deepseek/deepseek-v3.2".
+_API_FAMILY_NEW: tuple[CandidateModel, ...] = (
+    # The user's own model — mandatory, never benchmarked here.
+    CandidateModel(
+        id="qwen/qwen3.7-plus", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Qwen 3.7 Plus (OpenRouter)",
+        price_per_1m_input=0.32, price_per_1m_output=1.28, family="qwen",
+    ),
+    # Cheaper Qwen sibling (cheaper input AND output than 3.7 Plus).
+    CandidateModel(
+        id="qwen/qwen-plus", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Qwen-Plus (OpenRouter)",
+        price_per_1m_input=0.26, price_per_1m_output=0.78, family="qwen",
+    ),
+    # Cross-vendor baseline.
+    CandidateModel(
+        id="openai/gpt-5.4-mini", hosting_profile=OPENROUTER, context_length=65_536,
+        label="GPT-5.4-mini (OpenRouter)",
+        price_per_1m_input=0.75, price_per_1m_output=4.50, family="openai",
+    ),
+    # Fast, proven on the user's real workload — but now costly on output.
+    CandidateModel(
+        id="google/gemini-3.5-flash", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Gemini 3.5 Flash (OpenRouter)",
+        price_per_1m_input=1.50, price_per_1m_output=9.00, family="google",
+    ),
+    # Cheap-output DeepSeek flagship (KTD5; v4-flash is the deferred cheaper-input alt).
+    CandidateModel(
+        id="deepseek/deepseek-v3.2", hosting_profile=OPENROUTER, context_length=65_536,
+        label="DeepSeek V3.2 (OpenRouter)",
+        price_per_1m_input=0.229, price_per_1m_output=0.343, family="deepseek",
+    ),
+    # Cheap agentic model.
+    CandidateModel(
+        id="minimax/minimax-m2.5", hosting_profile=OPENROUTER, context_length=65_536,
+        label="MiniMax M2.5 (OpenRouter)",
+        price_per_1m_input=0.12, price_per_1m_output=0.48, family="minimax",
+    ),
+    # Cheapest-input serious Qwen — likely the cost-per-task winner on an
+    # input-dominated workload.
+    CandidateModel(
+        id="qwen/qwen3.5-flash", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Qwen 3.5 Flash (OpenRouter)",
+        price_per_1m_input=0.065, price_per_1m_output=0.26, family="qwen",
+    ),
+)
+
+# The full field: the seven new candidates plus the four continuity models.
+API_FAMILY_CANDIDATES: tuple[CandidateModel, ...] = (*_API_FAMILY_NEW, *API_CANDIDATES)
+
+
 # Free, tool-capable model for $0 end-to-end pipeline validation (the role Owl
 # Alpha filled before it was pulled). The ``:free`` variant is rate-limited, so it
 # is the ``api-free`` validation field only — not part of the paid ``api`` field.
@@ -309,6 +369,7 @@ CANDIDATE_FIELDS: dict[str, tuple[CandidateModel, ...]] = {
     "default": DEFAULT_CANDIDATES,
     "local": DEFAULT_CANDIDATES,
     "api": API_CANDIDATES,
+    "api-family": API_FAMILY_CANDIDATES,
     "api-free": (API_FREE_VALIDATION,),
 }
 

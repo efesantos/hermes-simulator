@@ -15,8 +15,7 @@ import sys
 from pathlib import Path
 
 from simulator.config import (
-    API_CANDIDATES,
-    DEFAULT_CANDIDATES,
+    CANDIDATE_FIELDS,
     CandidateModel,
     LOCAL_OLLAMA,
     RunConfig,
@@ -44,11 +43,15 @@ def _session_from_dict(d: dict) -> SessionRow:
 
 
 def _model_for(model_id: str) -> CandidateModel:
-    # Search both fields so API candidates keep their real provider + prices when
-    # a report is rebuilt from disk (else an API model is mis-costed as local $0).
-    for c in (*DEFAULT_CANDIDATES, *API_CANDIDATES):
-        if c.id == model_id:
-            return c
+    # Search EVERY known candidate field so an API model keeps its real provider +
+    # prices when a report is rebuilt from disk. Missing a field here silently
+    # mis-costs its models as local $0 (normalize_cost takes the LOCAL branch and
+    # ignores metered dollars) — which is why we iterate CANDIDATE_FIELDS rather
+    # than hard-coding a subset that new fields (e.g. api-family) would fall out of.
+    for field in CANDIDATE_FIELDS.values():
+        for c in field:
+            if c.id == model_id:
+                return c
     # Unknown id (e.g. an ad-hoc variant): synthesize a local 64K candidate.
     return CandidateModel(id=model_id, hosting_profile=LOCAL_OLLAMA, context_length=65_536)
 
