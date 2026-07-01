@@ -178,7 +178,11 @@ _ANSWER_KEY = {
         {
             "id": "abstain_orthodontist",
             "kind": "abstention",
-            "question": "When is the kids' orthodontist appointment?",
+            # Person-scoped (like dana's "Theo's dentist") to reduce false-negatives:
+            # a specific kid's orthodontist appointment that was never scheduled. The
+            # only real booking is Morgan's OWN dental cleaning (day 1), so a correct
+            # abstention need not reference any real dated appointment.
+            "question": "When is Robin's orthodontist appointment?",
             # There is no such appointment; the agent must not invent one.
             "trap_keywords": ["orthodontist"],
         },

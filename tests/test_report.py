@@ -186,8 +186,33 @@ def test_zero_cost_guard_in_best_value():
     free = _roll("free", cap=0.9, mem=0.9, rel=0.9, cost=0.0)  # $0 smoke-style track
     paid = _roll("paid", cap=0.7, mem=0.6, rel=0.8, cost=0.02)
     picks = pick_labels(_rows(free, paid))  # must not raise ZeroDivisionError
-    # $0 row is excluded from the value ratio; the paid floor-passer wins best-value.
+    # $0 row is excluded from BOTH cost-based picks (consistency): a free validation
+    # model is never crowned best-value or cheapest-viable.
     assert picks.best_value.model_id == "paid"
+    assert picks.cheapest_viable.model_id == "paid"
+
+
+def test_all_costed_picks_none_when_only_free_passers():
+    # Only floor-passers are $0 — cost-based picks are both None, and render notes it.
+    free1 = _roll("free1", cap=0.9, mem=0.9, rel=0.9, cost=0.0)
+    free2 = _roll("free2", cap=0.8, mem=0.7, rel=0.85, cost=0.0)
+    picks = pick_labels(_rows(free1, free2))
+    assert picks.n_floor_passers == 2
+    assert picks.best_value is None and picks.cheapest_viable is None
+    assert picks.best_accuracy is not None
+    assert "positive per-task cost" in render_picks(picks)
+
+
+def test_unmeasured_latency_scores_worst_not_best():
+    # A model with missing latency (0.0) must NOT be crowned fastest over a real one.
+    missing = _roll("missing", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=0.0)
+    real_fast = _roll("real_fast", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=2.0)
+    report = build_report([missing, real_fast], CompositeWeights(0, 0, 0, 0, 1))
+    assert report.ranked[0].model_id == "real_fast"  # measured-fast beats missing-data
+    # When every latency is missing, the speed dimension is non-discriminating.
+    m2 = _roll("m2", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=0.0)
+    both_missing = build_report([missing, m2], CompositeWeights(0, 0, 0, 0, 1))
+    assert both_missing.ranked[0].composite == pytest.approx(both_missing.ranked[1].composite)
 
 
 def test_empty_floor_passers_reports_none():

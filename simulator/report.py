@@ -55,7 +55,7 @@ class Report:
 def _invert_min_max(values: list[float]) -> list[float]:
     """Min-max invert to a 0..1 score (lowest=1, highest=0). Degenerate range -> all 1.
 
-    Used for cost (cheapest=1) and speed (fastest=1) — both "lower is better".
+    For cost, ``0`` legitimately means "cheapest" (a free model), so it maps to 1.0.
     """
     if not values:
         return []
@@ -65,9 +65,34 @@ def _invert_min_max(values: list[float]) -> list[float]:
     return [(hi - v) / (hi - lo) for v in values]
 
 
-# Back-compat alias; cost and speed share the same "lower is better" inversion.
 _cost_scores = _invert_min_max
-_speed_scores = _invert_min_max
+
+
+def _speed_scores(latencies: list[float]) -> list[float]:
+    """Speed score (fastest=1.0), like cost inversion but **missing-data-aware**.
+
+    Unlike cost (where ``0`` means free = best), a latency of ``0`` means the timing
+    was never measured — e.g. timestamps absent on the disk-rebuild/stitch path. Such
+    a track must NOT be rewarded as "instant": unmeasured (``<= 0``) latency scores
+    ``0.0`` (worst), and the min-max range is taken over the positive latencies only.
+    When nothing has a measured latency, the dimension is non-discriminating (all 1.0),
+    mirroring the degenerate cost case.
+    """
+    if not latencies:
+        return []
+    positive = [v for v in latencies if v > 0]
+    if not positive:
+        return [1.0 for _ in latencies]
+    lo, hi = min(positive), max(positive)
+    out: list[float] = []
+    for v in latencies:
+        if v <= 0:
+            out.append(0.0)  # unmeasured — never scored as fastest
+        elif hi == lo:
+            out.append(1.0)
+        else:
+            out.append((hi - v) / (hi - lo))
+    return out
 
 
 def build_report(rollups: list[ModelRollup], weights: CompositeWeights) -> Report:
@@ -173,10 +198,16 @@ def pick_labels(rows: list[ReportRow]) -> Picks:
     best_accuracy = max(survivors, key=lambda r: r.capability + r.memory)
     passers = [r for r in survivors if _passes_floor(r)]
 
-    value_eligible = [r for r in passers if r.cost_usd > 0]
-    best_value = (max(value_eligible, key=lambda r: (r.capability + r.memory) / r.cost_usd)
-                  if value_eligible else None)
-    cheapest_viable = min(passers, key=lambda r: r.cost_usd) if passers else None
+    # Both cost-based picks use the same eligibility: a floor-passer with a positive
+    # per-task cost. A $0 track (the api-free validation model, or a metered-$0 run)
+    # is a validation artifact, not a costed recommendation — excluding it from both
+    # keeps best_value and cheapest_viable consistent (best_value also can't divide
+    # by zero) rather than crowning a free model "cheapest viable" while best_value
+    # is blank.
+    costed_passers = [r for r in passers if r.cost_usd > 0]
+    best_value = (max(costed_passers, key=lambda r: (r.capability + r.memory) / r.cost_usd)
+                  if costed_passers else None)
+    cheapest_viable = min(costed_passers, key=lambda r: r.cost_usd) if costed_passers else None
 
     return Picks(best_accuracy, best_value, cheapest_viable, len(passers))
 
@@ -201,6 +232,9 @@ def render_picks(picks: Picks) -> str:
     ]
     if picks.n_floor_passers == 0:
         lines.append("  (no model clears the floor — best-value/cheapest-viable are (none))")
+    elif picks.cheapest_viable is None:
+        lines.append("  (floor-passers exist but none has a positive per-task cost — "
+                     "cost-based picks omitted; likely a $0 validation run)")
     return "\n".join(lines)
 
 
