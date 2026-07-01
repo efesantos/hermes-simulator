@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import RunConfig
-from .grading.judge import Judge
+from .grading.judge import Judge, rubric_for_persona
 from .grading.memory_exam import administer_exam
 from .harness import Harness
 from .metrics import (
@@ -93,7 +93,12 @@ def run_full(
             judge_mean = None
             if judge is not None and track.days:
                 transcript = "\n\n".join(d.stdout for d in track.days)
-                verdict = judge.score(transcript, candidate_family=model.family_name)
+                # Persona-scoped rubric (KTD7): multilingual dimension only where the
+                # persona uses it; monolingual personas keep the default rubric.
+                verdict = judge.score(
+                    transcript, candidate_family=model.family_name,
+                    rubric=rubric_for_persona(persona.name),
+                )
                 judge_mean = verdict.mean / 5.0  # 1..5 -> 0..1
                 # Persist so a disk-rebuilt report (build_report.py) keeps the
                 # judge's capability contribution — needed when a multi-seed field

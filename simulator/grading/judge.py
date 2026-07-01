@@ -40,6 +40,28 @@ DEFAULT_RUBRIC: dict[str, str] = {
     "memory_surfacing": "Brings up relevant remembered context (preferences, prior facts) when useful. 1=ignores known context, 5=weaves it in naturally.",
 }
 
+# Multilingual personas add a translation/language-handling dimension. Kept as a
+# SEPARATE rubric (not folded into DEFAULT_RUBRIC) so monolingual personas like
+# ``dana`` are scored on the same dimensions as before — adding it globally would
+# shift their judged capability and break baseline comparability (KTD7).
+MULTILINGUAL_RUBRIC: dict[str, str] = {
+    **DEFAULT_RUBRIC,
+    "multilingual": (
+        "Handles non-English content correctly. 1=ignores or garbles the requested "
+        "language, or leaves foreign-language mail untranslated; 5=accurate translation "
+        "and replies in the language the user asked for."
+    ),
+}
+
+# Personas whose transcripts should be judged with MULTILINGUAL_RUBRIC. Everything
+# else uses DEFAULT_RUBRIC (see :func:`rubric_for_persona`).
+MULTILINGUAL_PERSONAS: frozenset[str] = frozenset({"amsterdam"})
+
+
+def rubric_for_persona(persona_name: str) -> dict[str, str]:
+    """The judge rubric appropriate for a persona (KTD7 — persona-scoped rubric)."""
+    return MULTILINGUAL_RUBRIC if persona_name in MULTILINGUAL_PERSONAS else DEFAULT_RUBRIC
+
 
 class JudgeError(RuntimeError):
     """The judge could not produce a usable verdict."""
@@ -178,21 +200,31 @@ class Judge:
                 f"{candidate_family!r}; pick a judge from a different family"
             )
 
-    def _rubric_text(self) -> str:
-        return "\n".join(f"- {dim}: {desc}" for dim, desc in self.rubric.items())
+    def _rubric_text(self, rubric: Optional[dict[str, str]] = None) -> str:
+        active = rubric or self.rubric
+        return "\n".join(f"- {dim}: {desc}" for dim, desc in active.items())
 
     # --- single-response rubric scoring (what U9 uses) -----------------------
 
-    def score(self, transcript: str, *, candidate_family: str) -> Verdict:
-        """Score one agent transcript on the qualitative rubric (1-5 per dimension)."""
+    def score(
+        self, transcript: str, *, candidate_family: str,
+        rubric: Optional[dict[str, str]] = None,
+    ) -> Verdict:
+        """Score one agent transcript on the qualitative rubric (1-5 per dimension).
+
+        ``rubric`` overrides this judge's default rubric for a single call, letting
+        one judge score different personas on different dimensions (KTD7 — e.g. the
+        multilingual dimension only for the ``amsterdam`` persona).
+        """
         self._ensure_cross_family(candidate_family)
-        dims = list(self.rubric)
+        active = rubric or self.rubric
+        dims = list(active)
         system = (
             "You are an impartial evaluator of a personal-assistant AI. Score ONLY "
             "the rubric dimensions below, each from 1 to 5 using the anchors given. "
             "Judge the assistant's behavior, not its formatting. Respond with a JSON "
             'object: {"scores": {dim: int, ...}, "rationale": "one sentence"}.\n\n'
-            f"Rubric:\n{self._rubric_text()}"
+            f"Rubric:\n{self._rubric_text(active)}"
         )
         samples = [
             _extract_json(self._chat(
