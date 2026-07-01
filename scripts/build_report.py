@@ -67,7 +67,12 @@ def main() -> None:
     # fails regardless of how many seeds completed on disk. The authoritative
     # reliability (pass^k) comes from a single live run; this rebuilds whatever
     # exists. seeds is generous purely to satisfy the len(seeds) >= k invariant.
-    cfg = RunConfig(candidates=DEFAULT_CANDIDATES, seeds=(0, 1, 2, 3, 4), k=1)
+    # candidates spans EVERY known field (deduped by id) so display names resolve
+    # for whichever field the run used (default/api/api-family/...).
+    all_candidates = tuple(
+        {c.id: c for field in CANDIDATE_FIELDS.values() for c in field}.values()
+    )
+    cfg = RunConfig(candidates=all_candidates, seeds=(0, 1, 2, 3, 4), k=1)
 
     # Stage-1 outcomes -> eliminated map.
     eliminated: dict[str, str] = {}

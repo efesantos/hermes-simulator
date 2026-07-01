@@ -9,10 +9,10 @@ from simulator.metrics import ModelRollup
 from simulator.report import build_report, render_table
 
 
-def _roll(model_id, *, cap, mem, rel, cost, name=None):
+def _roll(model_id, *, cap, mem, rel, cost, latency=0.0, name=None):
     return ModelRollup(model_id=model_id, display_name=name or model_id, eliminated=False,
                        capability=cap, memory=mem, reliability=rel, cost_usd=cost,
-                       tokens=10000, n_tracks=3)
+                       latency_s=latency, tokens=10000, n_tracks=3)
 
 
 def _eliminated(model_id, reason):
@@ -95,3 +95,47 @@ def test_full_small_matrix_renders_ranked_report():
     assert len(report.eliminated) == 2
     text = render_table(report)
     assert "Composite" in text and "Eliminated in Stage 1:" in text
+
+
+# --- speed dimension (U4) ----------------------------------------------------
+
+
+def test_normalized_sums_across_five_dimensions():
+    w = CompositeWeights(0.30, 0.30, 0.15, 0.15, 0.10).normalized()
+    assert w.capability + w.memory + w.reliability + w.cost + w.speed == pytest.approx(1.0)
+
+
+def test_zero_sum_weights_still_raise():
+    with pytest.raises(ValueError):
+        CompositeWeights(0, 0, 0, 0, 0).normalized()
+
+
+def test_default_weights_reproduce_prior_four_dimension_ranking():
+    # Back-compat guard: the DEFAULT weighting (speed 0.0) must produce the same
+    # composites/order as an explicit 4-dimension weighting — no ranking shift.
+    rolls = [
+        _roll("a", cap=0.9, mem=0.8, rel=0.7, cost=0.02, latency=12.0),
+        _roll("b", cap=0.6, mem=0.6, rel=0.6, cost=0.01, latency=2.0),
+        _roll("c", cap=0.8, mem=0.9, rel=0.8, cost=0.05, latency=8.0),
+    ]
+    default = build_report(rolls, CompositeWeights())  # speed defaults to 0.0
+    explicit_4d = build_report(rolls, CompositeWeights(0.35, 0.35, 0.20, 0.10))
+    assert [r.model_id for r in default.ranked] == [r.model_id for r in explicit_4d.ranked]
+    for d, e in zip(default.ranked, explicit_4d.ranked):
+        assert d.composite == pytest.approx(e.composite)
+
+
+def test_speed_score_favors_faster_model():
+    slow = _roll("slow", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=16.0)
+    fast = _roll("fast", cap=0.7, mem=0.7, rel=0.7, cost=0.02, latency=2.0)
+    # Identical on everything but latency; a speed-only weighting ranks the faster first.
+    report = build_report([slow, fast], CompositeWeights(0, 0, 0, 0, 1))
+    assert report.ranked[0].model_id == "fast"
+    assert report.ranked[0].composite > report.ranked[1].composite
+
+
+def test_render_table_has_speed_column():
+    rolls = [_roll("good", cap=0.8, mem=0.7, rel=0.9, cost=0.02, latency=5.5, name="Good Model")]
+    text = render_table(build_report(rolls, CompositeWeights()))
+    assert "Speed" in text
+    assert "5.5" in text  # the latency value is rendered

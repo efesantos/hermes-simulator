@@ -7,9 +7,10 @@ present regardless of the weights — the weights only decide the composite and 
 ranking. Eliminated models are listed with their Stage-1 reason, never dropped.
 
 Composite normalization: capability/memory/reliability are already 0..1 (higher
-is better) and used directly. Cost (dollars, lower is better) is min-max inverted
-across the ranked models so the cheapest scores 1.0 and the priciest 0.0. The
-composite is the weight-normalized sum.
+is better) and used directly. Cost (dollars, lower is better) and speed (latency
+seconds, lower is better) are each min-max inverted across the ranked models so
+the cheapest / fastest scores 1.0 and the priciest / slowest 0.0. The composite
+is the weight-normalized sum.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ class ReportRow:
     reliability: float
     cost_usd: float
     tokens: float
+    latency_s: float
     composite: Optional[float]  # None for eliminated models
     rank: Optional[int]  # None for eliminated models
 
@@ -50,14 +52,22 @@ class Report:
         return [r for r in self.rows if r.eliminated]
 
 
-def _cost_scores(costs: list[float]) -> list[float]:
-    """Min-max invert cost to a 0..1 score (cheapest=1). Degenerate range -> all 1."""
-    if not costs:
+def _invert_min_max(values: list[float]) -> list[float]:
+    """Min-max invert to a 0..1 score (lowest=1, highest=0). Degenerate range -> all 1.
+
+    Used for cost (cheapest=1) and speed (fastest=1) — both "lower is better".
+    """
+    if not values:
         return []
-    lo, hi = min(costs), max(costs)
+    lo, hi = min(values), max(values)
     if hi == lo:
-        return [1.0 for _ in costs]
-    return [(hi - c) / (hi - lo) for c in costs]
+        return [1.0 for _ in values]
+    return [(hi - v) / (hi - lo) for v in values]
+
+
+# Back-compat alias; cost and speed share the same "lower is better" inversion.
+_cost_scores = _invert_min_max
+_speed_scores = _invert_min_max
 
 
 def build_report(rollups: list[ModelRollup], weights: CompositeWeights) -> Report:
@@ -67,13 +77,15 @@ def build_report(rollups: list[ModelRollup], weights: CompositeWeights) -> Repor
     eliminated = [r for r in rollups if r.eliminated]
 
     cost_scores = _cost_scores([r.cost_usd for r in survivors])
+    speed_scores = _speed_scores([r.latency_s for r in survivors])
     scored: list[tuple[ModelRollup, float]] = []
-    for r, cost_score in zip(survivors, cost_scores):
+    for r, cost_score, speed_score in zip(survivors, cost_scores, speed_scores):
         composite = (
             w.capability * r.capability
             + w.memory * r.memory
             + w.reliability * r.reliability
             + w.cost * cost_score
+            + w.speed * speed_score
         )
         scored.append((r, composite))
 
@@ -84,13 +96,15 @@ def build_report(rollups: list[ModelRollup], weights: CompositeWeights) -> Repor
         rows.append(ReportRow(
             model_id=r.model_id, display_name=r.display_name, eliminated=False, reason="",
             capability=r.capability, memory=r.memory, reliability=r.reliability,
-            cost_usd=r.cost_usd, tokens=r.tokens, composite=composite, rank=rank,
+            cost_usd=r.cost_usd, tokens=r.tokens, latency_s=r.latency_s,
+            composite=composite, rank=rank,
         ))
     for r in eliminated:
         rows.append(ReportRow(
             model_id=r.model_id, display_name=r.display_name, eliminated=True, reason=r.reason,
             capability=r.capability, memory=r.memory, reliability=r.reliability,
-            cost_usd=r.cost_usd, tokens=r.tokens, composite=None, rank=None,
+            cost_usd=r.cost_usd, tokens=r.tokens, latency_s=r.latency_s,
+            composite=None, rank=None,
         ))
     return Report(rows=rows, weights=w)
 
@@ -99,14 +113,15 @@ def render_table(report: Report) -> str:
     """Render the report as a fixed-width text table."""
     header = (
         f"{'#':>2}  {'Model':<22} {'Cap':>5} {'Mem':>5} {'Rel':>5} "
-        f"{'Cost$':>8} {'Tokens':>9} {'Composite':>9}"
+        f"{'Cost$':>8} {'Speed(s)':>9} {'Tokens':>9} {'Composite':>9}"
     )
     lines = [header, "-" * len(header)]
     for row in report.ranked:
         lines.append(
             f"{row.rank:>2}  {row.display_name:<22} "
             f"{row.capability:>5.2f} {row.memory:>5.2f} {row.reliability:>5.2f} "
-            f"{row.cost_usd:>8.4f} {row.tokens:>9.0f} {row.composite:>9.3f}"
+            f"{row.cost_usd:>8.4f} {row.latency_s:>9.1f} {row.tokens:>9.0f} "
+            f"{row.composite:>9.3f}"
         )
     if report.eliminated:
         lines.append("")

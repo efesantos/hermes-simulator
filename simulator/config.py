@@ -145,9 +145,14 @@ class CompositeWeights:
     memory: float = 0.35
     reliability: float = 0.20
     cost: float = 0.10
+    # Speed (response latency) enters the composite but defaults to 0.0 so the
+    # DEFAULT weighting reproduces the prior 4-dimension ranking exactly — no
+    # existing persona/field ranking shifts. The speed/cost rebalance lives only in
+    # the named "cost-forward" weighting (see report.NAMED_WEIGHTINGS), never here.
+    speed: float = 0.0
 
     def normalized(self) -> "CompositeWeights":
-        total = self.capability + self.memory + self.reliability + self.cost
+        total = self.capability + self.memory + self.reliability + self.cost + self.speed
         if total <= 0:
             raise ValueError("composite weights must sum to a positive number")
         return CompositeWeights(
@@ -155,6 +160,7 @@ class CompositeWeights:
             memory=self.memory / total,
             reliability=self.reliability / total,
             cost=self.cost / total,
+            speed=self.speed / total,
         )
 
 
