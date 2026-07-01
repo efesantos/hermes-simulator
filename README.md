@@ -26,13 +26,19 @@ expensive part cheap:
 
 The mock world (email / calendar / contacts) runs as **MCP servers** the agent
 calls; the grader reads the same backing store **out-of-band** — never through an
-agent-reachable tool — which closes the reward-hack / answer-leak hole.
+agent-reachable tool — which closes the reward-hack / answer-leak hole. The
+servers run as **persistent per-track HTTP servers** (a `WorldGateway` starts them
+once per track and registers them with hermes by URL), so tool discovery is a fast
+connect-to-a-running-server rather than a per-run subprocess boot that the agent
+can race — see `docs/solutions/integration-issues/api-path-mcp-cold-start.md`.
 
 Grading is hybrid: deterministic state-diff for crisp outcomes, a cross-family
-frontier **LLM judge** for fuzzy behavior (tone, proactivity, surfacing
-remembered context), a forgetting-aware **memory exam** (recall / knowledge-update
-/ abstention), and **behavioral-improvement** checks over days. Reliability is
-`pass^k`; cost is always tokens-to-complete plus a comparable dollar figure.
+**LLM judge** for fuzzy behavior (tone, proactivity, surfacing remembered context)
+— run via the **Claude Code subscription** (`claude -p`, no API key), a different
+family from every candidate — a forgetting-aware **memory exam** (recall /
+knowledge-update / abstention), and **behavioral-improvement** checks over days.
+Reliability is `pass^k`; cost is always tokens-to-complete plus a comparable
+dollar figure.
 
 ## Layout
 
@@ -42,7 +48,7 @@ simulator/
   harness.py         the only module that drives the hermes CLI
   runner.py          two-stage funnel orchestrator
   pipeline.py        run_full: funnel -> exam -> evaluate -> rollup -> report
-  world/             mock MCP servers + out-of-band SQLite store
+  world/             mock MCP servers (gateway.py = persistent per-track HTTP) + store
   scenarios/         stage-1 tasks, persona schema + first persona (dana)
   counterparty.py    fixed-model spouse/coach stand-in (partial observability)
   grading/           deterministic, behavioral, memory_exam, judge
@@ -55,23 +61,36 @@ results/             trajectories + reports (gitignored)
 ## Requirements
 
 - A working `hermes` (Hermes Agent, validated against **v0.16.0**) on `PATH`.
-- **Ollama** for local candidate models and the counterparty.
+- **Ollama** for local candidate models and the local counterparty.
 - Python ≥ 3.11. The mock-world MCP servers run under this project's venv (which
   carries the `mcp` SDK), launched as `python -m simulator.world.<server>`.
-- An API key only if you use API-hosted candidates or the LLM judge.
-  - For repo-safe persistence, store it in a local `.env` file (see below).
+- `OPENROUTER_API_KEY` only if you run the **API** candidate field — store it in a
+  gitignored `.env` (see below). The **LLM judge needs no API key**: it runs via
+  your Claude Code subscription (`claude -p`), so `claude` must be installed and
+  logged in when the judge is enabled.
 
 ## Usage
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
-# Run the default candidate field against the 'dana' persona:
+# Run the default (local Ollama) candidate field against the 'dana' persona:
 .venv/bin/python -m simulator
 
 # Include the Stage-1 pre-filter suite:
 .venv/bin/python -m simulator --with-stage1
+
+# API-hosted field over OpenRouter (needs OPENROUTER_API_KEY; judge on by default):
+.venv/bin/python -m simulator --candidates api --seeds 5
+.venv/bin/python -m simulator --candidates api-free --seeds 1   # free model, $0 validation
+.venv/bin/python -m simulator --candidates api --model z-ai/glm-5.2 --no-judge
 ```
+
+Candidate fields: `default`/`local` (Ollama), `api` (OpenRouter, paid), `api-free`
+(one free model for $0 end-to-end validation). `--seeds N` sets tracks per model;
+`--model <id>` (repeatable) restricts to a subset. For the long, unattended,
+multi-seed runs that exceed an interactive session's time cap, see
+`docs/guides/vps-unattended-run.md`.
 
 Repo-safe persistent API key setup (one-time):
 

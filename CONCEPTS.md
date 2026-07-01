@@ -37,4 +37,15 @@ The fake email/calendar/contacts environment the agent operates through MCP tool
 Scoring that reads the world's backing store and persisted trajectories directly rather than through any agent-reachable tool, so an agent can neither influence the score nor leak the ground truth.
 
 ### Tool starvation
-A run in which the agent executed without its mock-world tools loaded — because the MCP servers lost a startup race against the model load — recognizable by an input-token count far below a tool-loaded run together with zero tool calls; such runs are infrastructure artifacts, not model verdicts.
+A run in which the agent executed without its mock-world tools loaded — because the MCP servers lost a startup race against the model load — recognizable by an input-token count far below a tool-loaded run together with zero tool calls; such runs are infrastructure artifacts, not model verdicts. **Resolved** by the persistent MCP gateway; the input-token retry heuristic is kept only as a safety net.
+
+### Persistent MCP gateway
+The mechanism that prevents tool starvation: the three mock-world servers run as long-lived per-track `streamable-http` servers (a `WorldGateway` starts them once per track and registers them with hermes by URL), so tool discovery is a fast connect-to-a-running-server instead of a per-run subprocess boot the agent can race. Because the servers persist across a track's days while each day is a separate hermes invocation, the per-day simulated clock is delivered via a per-track sidecar file the gateway rewrites, not process env.
+
+## Candidates and hosting
+
+### Candidate field
+A named set of models to run, selected with `--candidates`: `default`/`local` (Ollama on this machine), `api` (paid models over OpenRouter), and `api-free` (a single free model for $0 end-to-end pipeline validation).
+
+### Tool-support guard
+A pre-run check that drops an OpenRouter candidate whose providers don't advertise tool use (`supported_parameters` lacks `tools`), so an agent run never silently fails as "did not call any tool" on a model that can't tool-call at all.

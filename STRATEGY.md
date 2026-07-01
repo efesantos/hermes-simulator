@@ -1,6 +1,6 @@
 ---
 name: Hermes Model Simulator
-last_updated: 2026-06-29
+last_updated: 2026-06-30
 ---
 
 # Hermes Model Simulator Strategy
@@ -47,7 +47,10 @@ trustworthy evidence on capability and true cost, without weeks of manual testin
 
 ### Harness & world fidelity
 The fixed Hermes wrapper, the mock MCP world, the run orchestrator, and their
-robustness (model warmup, tool-starvation retry, artifact prevention).
+robustness. The MCP cold-start race that corrupted early runs is **resolved**: the
+mock-world servers now run as a persistent per-track HTTP gateway, so tool
+discovery is deterministic for both local and API fields (model warmup and the
+tool-starvation retry are kept as safety nets).
 
 _Why it serves the approach:_ keeps measurement fair (one harness), realistic, and
 reliable — without it, the rankings are noise.
@@ -68,7 +71,11 @@ out-of-band), and the cost and reliability math is honest.
 
 ### Candidate & hosting coverage
 The field of candidate models (local and API) running validly at the 64K context
-floor, with real cost-per-hosting profiles.
+floor, with real cost-per-hosting profiles. The **API field over OpenRouter is
+operational** (GLM-5.2, Llama-3.3, Qwen2.5-72B, Mistral-Large), with a
+tool-support guard that drops models whose providers can't do agentic tool use.
+Current leader: **GLM-5.2** (the first model to adopt a mid-run knowledge update);
+see `docs/benchmark-findings-2026-06-30.md`.
 
 _Why it serves the approach:_ makes "true cost" real and spans the deployment options
 actually worth choosing between.

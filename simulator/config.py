@@ -264,6 +264,27 @@ API_CANDIDATES: tuple[CandidateModel, ...] = (
         price_per_1m_output=0.32,
         family="llama",
     ),
+    # Different families for breadth (all verified tool-capable on OpenRouter
+    # 2026-06-30). The benchmark-findings doc called for the 24B-70B tool-tuned
+    # tier across families — these fill it out.
+    CandidateModel(
+        id="qwen/qwen-2.5-72b-instruct",
+        hosting_profile=OPENROUTER,
+        context_length=65_536,
+        label="Qwen2.5 72B (OpenRouter)",
+        price_per_1m_input=0.36,
+        price_per_1m_output=0.40,
+        family="qwen",
+    ),
+    CandidateModel(
+        id="mistralai/mistral-large-2512",
+        hosting_profile=OPENROUTER,
+        context_length=65_536,
+        label="Mistral-Large (OpenRouter)",
+        price_per_1m_input=0.50,
+        price_per_1m_output=1.50,
+        family="mistral",
+    ),
 )
 
 
