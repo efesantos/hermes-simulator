@@ -344,9 +344,18 @@ _API_FAMILY_NEW: tuple[CandidateModel, ...] = (
     # Cheapest-input serious Qwen — likely the cost-per-task winner on an
     # input-dominated workload.
     CandidateModel(
-        id="qwen/qwen3.5-flash", hosting_profile=OPENROUTER, context_length=65_536,
+        id="qwen/qwen3.5-flash-02-23", hosting_profile=OPENROUTER, context_length=65_536,
         label="Qwen 3.5 Flash (OpenRouter)",
         price_per_1m_input=0.065, price_per_1m_output=0.26, family="qwen",
+    ),
+    # Frontier reference (user-requested). NOTE: family "anthropic" == the default
+    # LLM judge's family, so the cross-family guard skips the judge's qualitative
+    # blend for this model — its capability is deterministic-only (fair, but on a
+    # slightly different basis than the judge-blended others; flag in findings).
+    CandidateModel(
+        id="anthropic/claude-sonnet-5", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Sonnet 5 (OpenRouter)",
+        price_per_1m_input=2.00, price_per_1m_output=10.00, family="anthropic",
     ),
 )
 

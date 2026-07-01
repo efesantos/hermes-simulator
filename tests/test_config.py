@@ -22,7 +22,8 @@ _EXPECTED_NEW = {
     "google/gemini-3.5-flash",
     "deepseek/deepseek-v3.2",
     "minimax/minimax-m2.5",
-    "qwen/qwen3.5-flash",
+    "qwen/qwen3.5-flash-02-23",
+    "anthropic/claude-sonnet-5",
 }
 
 

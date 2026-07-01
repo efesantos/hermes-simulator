@@ -136,3 +136,11 @@ def test_rollup_surfaces_eliminated_models_with_reason():
     assert not rolls["good"].eliminated
     assert rolls["toosmall"].eliminated
     assert "below floor" in rolls["toosmall"].reason
+
+
+def test_track_latency_seconds_sums_positive_day_elapsed():
+    from simulator.metrics import track_latency_seconds
+    # Sums per-day wall-clock; non-positive (skipped/failed day) entries are ignored.
+    assert track_latency_seconds([3.0, 4.5, 2.5]) == pytest.approx(10.0)
+    assert track_latency_seconds([5.0, 0.0, -1.0]) == pytest.approx(5.0)
+    assert track_latency_seconds([]) == 0.0
