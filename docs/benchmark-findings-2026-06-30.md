@@ -1,9 +1,54 @@
 # Hermes model-simulator — API-field findings (2026-06-30)
 
 First **reliable** API-model benchmark, run after the persistent MCP gateway
-removed the cold-start race (PR #1). The numbers come from run `api-final-3seed`
-(GLM-5.2 and Llama-3.3 70B, dana persona, 3 seeds, LLM judge on). This is the
-companion to `docs/benchmark-findings-2026-06-29.md` (the local field).
+removed the cold-start race (PR #1). This is the companion to
+`docs/benchmark-findings-2026-06-29.md` (the local field).
+
+---
+
+## Definitive update (5 seeds, 4 families) — the ranking changed
+
+The larger run (all four API families — GLM-5.2, Llama-3.3, Qwen2.5-72B,
+Mistral-Large — **5 seeds each**, judge-inclusive, run `api-5seed`, 20 tracks)
+**supersedes the 3-seed result below. The 3-seed winner did not hold up.**
+
+```
+ #  Model              Cap   Mem   Rel*  Cost$   Composite
+ 1  Mistral-Large      0.73  0.70  1.00  0.089   0.753
+ 2  Qwen2.5-72B        0.78  0.45  1.00  0.103   0.673
+ 3  GLM-5.2            0.80  0.40  0.80  0.154   0.580
+ 4  Llama-3.3 70B      0.52  0.35  0.80  0.033   0.565
+```
+\* Rel here is the k=1 combined-rebuild pass-rate (`build_report` recovery mode).
+The live per-model runs computed pass^5, which penalized the low-reliability models
+*further* (GLM-5.2's live pass^5 was 0.33) — strengthening, not weakening, Mistral's
+lead.
+
+**What changed and why it matters:**
+
+- **Mistral-Large is the real leader (0.753)** — the best memory (0.70) at perfect
+  reliability. It is the only model to crack the *second* knowledge update (swim,
+  1/5) on top of the first (soccer, 4/5).
+- **GLM-5.2's 3-seed lead was largely noise.** At 5 seeds it falls to #3 (0.580):
+  its reliability dropped (some seeds failed to clear the capability bar) and its
+  memory regressed to the pack. A 3-seed run would have crowned the wrong model —
+  this is the **ranking-reproducibility** metric doing exactly its job.
+- **Memory is still the wall.** Soccer (the earlier update) is now handled by most
+  (Mistral/GLM 4/5, Qwen 3/5); **swim (the later update) defeats everyone** (Mistral
+  1/5, the rest 0/5). Adopting a *second* mid-run change is the open frontier.
+- A grader bug surfaced and was fixed mid-run: a model wrote a non-ISO event time
+  (`"this week 10:00 AM"`) that crashed the behavioral grader / `build_report`
+  (PR #4).
+
+The single most important lesson: **3 seeds was not enough to trust the winner.**
+The 3-seed findings below are kept as the record of how the picture evolved.
+
+---
+
+## 3-seed run (superseded — kept for the record)
+
+The numbers below come from run `api-final-3seed` (GLM-5.2 and Llama-3.3 70B,
+dana persona, 3 seeds, LLM judge on).
 
 > **Status of each claim:** results are facts with the run they came from; where
 > I extrapolate it's marked. This run is 3 seeds — directional on absolute scores,

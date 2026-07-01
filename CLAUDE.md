@@ -32,5 +32,6 @@ capability, memory, reliability, and cost. See `README.md` for the full picture.
   reads world state out-of-band (never through an agent tool). The mock-world MCP
   servers run as a persistent per-track HTTP gateway (`simulator/world/gateway.py`)
   so tool discovery never races the agent's first turn.
-- Latest benchmark state: `docs/benchmark-findings-2026-06-30.md` (API field;
-  GLM-5.2 leads). `docs/benchmark-findings-2026-06-29.md` is the local field.
+- Latest benchmark state: `docs/benchmark-findings-2026-06-30.md` (API field, 5-seed
+  definitive: **Mistral-Large leads**; the 3-seed GLM-5.2 lead did not reproduce).
+  `docs/benchmark-findings-2026-06-29.md` is the local field.
