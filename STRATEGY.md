@@ -74,8 +74,9 @@ The field of candidate models (local and API) running validly at the 64K context
 floor, with real cost-per-hosting profiles. The **API field over OpenRouter is
 operational** (GLM-5.2, Llama-3.3, Qwen2.5-72B, Mistral-Large), with a
 tool-support guard that drops models whose providers can't do agentic tool use.
-Current leader: **GLM-5.2** (the first model to adopt a mid-run knowledge update);
-see `docs/benchmark-findings-2026-06-30.md`.
+Current leader (definitive 5-seed run): **Mistral-Large** (best memory at perfect
+reliability; the only model to adopt the *second* mid-run knowledge update) — the
+3-seed GLM-5.2 lead did not reproduce. See `docs/benchmark-findings-2026-06-30.md`.
 
 _Why it serves the approach:_ makes "true cost" real and spans the deployment options
 actually worth choosing between.
