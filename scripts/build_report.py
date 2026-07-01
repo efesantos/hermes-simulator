@@ -29,7 +29,7 @@ from simulator.metrics import (
     rollup,
     tokens_to_complete,
 )
-from simulator.report import build_report, render_table
+from simulator.report import render_weightings
 from simulator.scenarios.personas import ALL_PERSONAS
 
 
@@ -120,11 +120,13 @@ def main() -> None:
             ))
 
     rollups = rollup(evaluations, cfg, eliminated=eliminated)
-    report = build_report(rollups, cfg.weights)
     print(f"=== report rebuilt from {run_dir} ===")
     print(f"(survivors with tracks: {len({e.model_id for e in evaluations})}, "
           f"eliminated: {len(eliminated)})\n")
-    print(render_table(report))
+    # Full output: the ranked table under each named weighting + the three picks
+    # ("show all, no single winner"). build_report costs api-family models correctly
+    # now that _model_for searches every field.
+    print(render_weightings(rollups))
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ from .metrics import (
     rollup,
     tokens_to_complete,
 )
-from .report import Report, build_report, render_table
+from .report import Report, build_report, render_table, render_weightings
 from .runner import HarnessFactory, Runner, _default_harness_factory
 from .scenarios.types import Counterparty, Persona, Stage1Task
 
@@ -131,5 +131,8 @@ def run_full(
     report = build_report(rollups, run_config.weights)
     rendered = render_table(report)
 
+    # report.txt keeps the single-weighting table (back-compat); report_full.txt
+    # adds the ≥2 named weightings + the three labelled picks (R6, "show all").
     (Path(matrix.results_dir) / "report.txt").write_text(rendered)
+    (Path(matrix.results_dir) / "report_full.txt").write_text(render_weightings(rollups))
     return report, rendered

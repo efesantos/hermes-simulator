@@ -129,3 +129,110 @@ def render_table(report: Report) -> str:
         for row in report.eliminated:
             lines.append(f"  - {row.display_name}: {row.reason}")
     return "\n".join(lines)
+
+
+# --- labelled picks (R6) -----------------------------------------------------
+# The eval deliberately crowns no single composite winner; instead it surfaces
+# three labelled picks against a viability floor, plus the full table under more
+# than one weighting, so the user makes the accuracy-vs-cost trade-off themselves.
+
+# Viability floor gating best-value and cheapest-viable (KTD3). Tunable.
+CAP_FLOOR = 0.60
+MEM_FLOOR = 0.50
+REL_FLOOR = 0.75
+
+
+def _passes_floor(row: ReportRow) -> bool:
+    return (row.capability >= CAP_FLOOR
+            and row.memory >= MEM_FLOOR
+            and row.reliability >= REL_FLOOR)
+
+
+@dataclass(frozen=True)
+class Picks:
+    """Three labelled recommendations derived from the per-dimension rows."""
+
+    best_accuracy: Optional[ReportRow]  # max capability+memory, floor ignored
+    best_value: Optional[ReportRow]  # max (cap+mem)/cost among floor-passers ($>0)
+    cheapest_viable: Optional[ReportRow]  # min cost among floor-passers
+    n_floor_passers: int
+
+
+def pick_labels(rows: list[ReportRow]) -> Picks:
+    """Compute the three labelled picks from the (survivor) rows.
+
+    Picks are weighting-independent — they read raw dimensions and cost, not the
+    composite — so any built report's ``ranked`` rows can feed this. best-value
+    guards ``cost_usd <= 0`` (the api-free $0 smoke and any metered-$0 track would
+    otherwise divide by zero), excluding such rows from the value ratio.
+    """
+    survivors = [r for r in rows if not r.eliminated]
+    if not survivors:
+        return Picks(None, None, None, 0)
+
+    best_accuracy = max(survivors, key=lambda r: r.capability + r.memory)
+    passers = [r for r in survivors if _passes_floor(r)]
+
+    value_eligible = [r for r in passers if r.cost_usd > 0]
+    best_value = (max(value_eligible, key=lambda r: (r.capability + r.memory) / r.cost_usd)
+                  if value_eligible else None)
+    cheapest_viable = min(passers, key=lambda r: r.cost_usd) if passers else None
+
+    return Picks(best_accuracy, best_value, cheapest_viable, len(passers))
+
+
+def render_picks(picks: Picks) -> str:
+    """Human-readable summary of the three picks."""
+    def _line(label: str, row: Optional[ReportRow]) -> str:
+        if row is None:
+            return f"  {label:<16} (none)"
+        return (f"  {label:<16} {row.display_name}  "
+                f"(cap {row.capability:.2f} / mem {row.memory:.2f} / "
+                f"rel {row.reliability:.2f} / ${row.cost_usd:.4f}/task / "
+                f"{row.latency_s:.1f}s)")
+
+    lines = [
+        "Picks (no single winner — pick by your priority):",
+        f"  floor: cap>={CAP_FLOOR:.2f}, mem>={MEM_FLOOR:.2f}, rel>={REL_FLOOR:.2f} "
+        f"— {picks.n_floor_passers} model(s) clear it",
+        _line("best accuracy", picks.best_accuracy),
+        _line("best value", picks.best_value),
+        _line("cheapest viable", picks.cheapest_viable),
+    ]
+    if picks.n_floor_passers == 0:
+        lines.append("  (no model clears the floor — best-value/cheapest-viable are (none))")
+    return "\n".join(lines)
+
+
+# --- multiple named weightings (R6) ------------------------------------------
+# memory_heavy is the unchanged default; cost_forward raises cost+speed and lowers
+# memory. This named pair is the ONLY home for the speed/cost rebalance — the
+# global default (CompositeWeights()) stays memory-heavy with speed 0.0.
+NAMED_WEIGHTINGS: dict[str, CompositeWeights] = {
+    "memory_heavy": CompositeWeights(),  # 0.35 / 0.35 / 0.20 / 0.10 / 0.0
+    "cost_forward": CompositeWeights(
+        capability=0.25, memory=0.20, reliability=0.15, cost=0.25, speed=0.15
+    ),
+}
+
+
+def render_weightings(
+    rollups: list[ModelRollup],
+    weightings: Optional[dict[str, CompositeWeights]] = None,
+) -> str:
+    """Render the ranked table once per named weighting, plus the picks once.
+
+    Picks are weighting-independent, so they are computed from the first weighting's
+    rows and shown a single time after the tables.
+    """
+    weightings = weightings or NAMED_WEIGHTINGS
+    blocks: list[str] = []
+    first_report: Optional[Report] = None
+    for name, weights in weightings.items():
+        report = build_report(rollups, weights)
+        if first_report is None:
+            first_report = report
+        blocks.append(f"== weighting: {name} ==\n{render_table(report)}")
+    if first_report is not None:
+        blocks.append(render_picks(pick_labels(first_report.rows)))
+    return "\n\n".join(blocks)
