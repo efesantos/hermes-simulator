@@ -61,6 +61,51 @@ def test_run_full_survives_a_raising_judge(tmp_path, fake_hermes, monkeypatch):
     assert report.ranked and report.ranked[0].model_id == "qwen3.6:latest"
 
 
+def test_judge_score_persisted_and_rebuilt_from_disk(tmp_path, fake_hermes, monkeypatch):
+    # The judge's capability contribution must survive a disk rebuild: the pipeline
+    # writes judge.json per track, and scripts/build_report.py reads it back (so a
+    # chunked multi-seed field can be stitched together without losing the judge).
+    import json
+    import subprocess
+    import sys
+
+    from simulator.grading.judge import Judge, JudgeConfig
+
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    cfg = RunConfig(candidates=(_model("qwen3.6:latest"),), seeds=(0, 1), k=2)
+    factory = lambda home, model: Harness(home, model, hermes_bin=fake_hermes, timeout=60)
+    good_judge = Judge(  # cross-family vs the qwen candidate; returns a valid verdict
+        JudgeConfig(model="j", family="anthropic", base_url="http://x/v1"),
+        chat_fn=lambda *a, **k: '{"scores": {"tone": 4, "proactivity": 4, '
+        '"memory_surfacing": 4}, "rationale": "ok"}',
+    )
+
+    run_full(cfg, [DANA], stage1_tasks=[], results_root=tmp_path,
+             harness_factory=factory, judge=good_judge, run_id="jp")
+
+    judge_files = list((tmp_path / "jp" / "stage2").glob("*/*/seed*/judge.json"))
+    assert judge_files, "expected judge.json written per Stage-2 track"
+    payload = json.loads(judge_files[0].read_text())
+    assert 0.0 <= payload["judge_mean_0_1"] <= 1.0
+    assert payload["scores"]  # rubric dimensions preserved for inspection
+
+    def _rebuild():
+        r = subprocess.run(
+            [sys.executable, "scripts/build_report.py", "jp", str(tmp_path)],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parents[1],
+        )
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
+    with_judge = _rebuild()
+    assert "Qwen3.6" in with_judge and "Composite" in with_judge
+    # Removing the persisted judge changes the rebuilt capability -> proves the
+    # script actually reads judge.json (not that it merely runs).
+    for jf in judge_files:
+        jf.unlink()
+    assert _rebuild() != with_judge
+
+
 def test_family_name_inference():
     assert _model("qwen3.6:latest").family_name == "qwen"
     assert _model("gemma3:12b").family_name == "gemma"

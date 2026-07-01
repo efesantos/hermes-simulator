@@ -79,11 +79,14 @@ def main() -> None:
                     if d.get("session")]
         answers_path = track_dir / "memory_exam.json"
         answers = json.loads(answers_path.read_text()) if answers_path.exists() else None
+        judge_path = track_dir / "judge.json"
+        judge_mean = (json.loads(judge_path.read_text()).get("judge_mean_0_1")
+                      if judge_path.exists() else None)
         evaluations.append(evaluate_track(
             persona, _model_for(track["model_id"]), track_dir=str(track_dir),
             sessions=sessions, seed=track["seed"],
             completed=(track["status"] == "completed"), run_config=cfg,
-            memory_answers=answers,
+            memory_answers=answers, judge_mean_0_1=judge_mean,
         ))
 
     rollups = rollup(evaluations, cfg, eliminated=eliminated)

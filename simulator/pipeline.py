@@ -95,6 +95,14 @@ def run_full(
                 transcript = "\n\n".join(d.stdout for d in track.days)
                 verdict = judge.score(transcript, candidate_family=model.family_name)
                 judge_mean = verdict.mean / 5.0  # 1..5 -> 0..1
+                # Persist so a disk-rebuilt report (build_report.py) keeps the
+                # judge's capability contribution — needed when a multi-seed field
+                # is run in per-model chunks and stitched back together.
+                (Path(track.trajectory_dir) / "judge.json").write_text(
+                    json.dumps({"judge_mean_0_1": judge_mean,
+                                "scores": verdict.scores,
+                                "rationale": verdict.rationale}, indent=2)
+                )
 
             evaluations.append(evaluate_track(
                 persona, model, track_dir=track.trajectory_dir, sessions=track.sessions,
