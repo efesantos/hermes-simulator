@@ -24,6 +24,14 @@ tags:
 
 # MCP cold-start race — tool-starved agent runs corrupt benchmark results
 
+> **Status (2026-06-30): the primary fix is now the persistent MCP gateway**, not
+> the warm + token-gate mitigation documented below. The three mock-world servers
+> run as long-lived per-track HTTP servers (`simulator/world/gateway.py`; see
+> [[api-path-mcp-cold-start]]), so discovery no longer races the agent's first turn
+> — for local *and* API runs. `warm()` and the `TOOLS_LOADED_MIN_INPUT` token-gate
+> retry described here are kept as **safety nets**, no longer load-bearing. The
+> diagnosis and the token-signature triage below remain valid.
+
 ## Problem
 
 When Ollama cold-loads a model, that load races the three mock-world MCP servers'
@@ -172,17 +180,18 @@ first turn fires without tools in context.
 - **Recalibrate the threshold if the tool surface changes.** `TOOLS_LOADED_MIN_INPUT`
   is tuned to the ~10–12K schema cost of the three mock-world servers; changing the
   number or size of MCP tools may move the no-tools/with-tools gap.
-- **Deeper fix (not yet implemented): a persistent MCP gateway.** The warm+retry
-  combination mitigates a race that exists *because* the three MCP servers are spawned
-  fresh per run. Running them as long-lived processes Hermes connects to would
-  eliminate the boot race at its source and make the token gate a safety net rather
-  than a load-bearing mechanism.
+- **Deeper fix (shipped 2026-06-30): a persistent MCP gateway.** The warm+retry
+  combination mitigated a race that existed *because* the three MCP servers were
+  spawned fresh per run. Running them as long-lived per-track HTTP servers Hermes
+  connects to eliminated the boot race at its source and demoted the token gate to a
+  safety net rather than a load-bearing mechanism. See [[api-path-mcp-cold-start]]
+  and `simulator/world/gateway.py`.
 
 ## Related Issues
 
 - `docs/benchmark-findings-2026-06-29.md` — the run that surfaced this; §"The
   engineering story" item 1 documents the blast radius (most of run 1's eliminations
-  were artifacts) and the deferred persistent-gateway fix.
+  were artifacts) and the persistent-gateway fix that later shipped ([[api-path-mcp-cold-start]]).
 - Source: `simulator/harness.py` (`warm()`, `run_oneshot`, `TOOLS_LOADED_MIN_INPUT`),
   `simulator/runner.py` (`_prepared_harness`, `warm_models`), `simulator/world/registration.py`
   (registers the three racing MCP servers).
