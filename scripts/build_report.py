@@ -22,7 +22,14 @@ from simulator.config import (
     RunConfig,
 )
 from simulator.harness import SessionRow
-from simulator.metrics import evaluate_track, rollup
+from simulator.metrics import (
+    TrackEvaluation,
+    evaluate_track,
+    latency_seconds,
+    normalize_cost,
+    rollup,
+    tokens_to_complete,
+)
 from simulator.report import build_report, render_table
 from simulator.scenarios.personas import ALL_PERSONAS
 
@@ -82,12 +89,27 @@ def main() -> None:
         judge_path = track_dir / "judge.json"
         judge_mean = (json.loads(judge_path.read_text()).get("judge_mean_0_1")
                       if judge_path.exists() else None)
-        evaluations.append(evaluate_track(
-            persona, _model_for(track["model_id"]), track_dir=str(track_dir),
-            sessions=sessions, seed=track["seed"],
-            completed=(track["status"] == "completed"), run_config=cfg,
-            memory_answers=answers, judge_mean_0_1=judge_mean,
-        ))
+        model = _model_for(track["model_id"])
+        # Per-track isolation (mirrors the live pipeline): a single track that
+        # fails grading — e.g. a model wrote a non-ISO event time — folds in as a
+        # degraded evaluation instead of crashing the whole rebuild.
+        try:
+            evaluations.append(evaluate_track(
+                persona, model, track_dir=str(track_dir),
+                sessions=sessions, seed=track["seed"],
+                completed=(track["status"] == "completed"), run_config=cfg,
+                memory_answers=answers, judge_mean_0_1=judge_mean,
+            ))
+        except Exception as exc:  # noqa: BLE001 - report robustness over strictness
+            print(f"warning: track {track_dir} failed grading ({exc}); "
+                  "folding in as degraded", file=sys.stderr)
+            evaluations.append(TrackEvaluation(
+                model_id=model.id, persona=persona.name, seed=track["seed"],
+                completed=False, capability=0.0, memory=0.0,
+                tokens=tokens_to_complete(sessions),
+                cost_usd=normalize_cost(sessions, model, cfg),
+                latency_s=latency_seconds(sessions),
+            ))
 
     rollups = rollup(evaluations, cfg, eliminated=eliminated)
     report = build_report(rollups, cfg.weights)
