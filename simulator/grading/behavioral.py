@@ -69,11 +69,19 @@ def score_no_event_before(
     a "never books before 9am" preference even if they fall early.
     """
     floor = _parse_time(hhmm)
-    early = [
-        e for e in snapshot.get("events", [])
-        if e.get("start") not in exempt_starts
-        and datetime.fromisoformat(e["start"]).time() < floor
-    ]
+    early = []
+    for e in snapshot.get("events", []):
+        if e.get("start") in exempt_starts:
+            continue
+        try:
+            start_time = datetime.fromisoformat(e["start"]).time()
+        except (ValueError, TypeError, KeyError):
+            # A model may write a non-ISO start (e.g. "this week 10:00 AM"); it
+            # can't be assessed against the floor, so skip it rather than crash the
+            # grader (and, downstream, the whole report rebuild).
+            continue
+        if start_time < floor:
+            early.append(e)
     if early:
         titles = [e.get("title") for e in early]
         return False, f"events scheduled before {hhmm}: {titles}"

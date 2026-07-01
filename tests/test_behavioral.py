@@ -30,6 +30,20 @@ def test_no_event_before_fails_on_early_booking():
     assert not passed and "Sync" in detail
 
 
+def test_no_event_before_skips_unparseable_start():
+    # Regression: a model can write a non-ISO start (e.g. "this week 10:00 AM").
+    # It must be skipped, not crash the grader (which crashed build_report on a
+    # real 5-seed run). A clean early booking alongside it is still caught.
+    snap = {"events": [
+        {"title": "Vague", "start": "this week 10:00 AM"},
+        {"title": "Early", "start": "2026-07-09T08:00:00"},
+    ]}
+    passed, detail = score_no_event_before(snap, "09:00")
+    assert not passed and "Early" in detail and "Vague" not in detail
+    # And an unparseable start on its own does not fail (or crash).
+    assert score_no_event_before({"events": [{"title": "Vague", "start": "soon"}]}, "09:00")[0]
+
+
 def test_not_after_day_passes_when_keyword_dropped():
     texts = {1: "got it", 2: "soccer moved to Wednesday", 3: "pickup is Wednesday", 4: "all set"}
     passed, _ = score_not_after_day(texts, learned_on_day=2, forbidden_keyword="thursday")
