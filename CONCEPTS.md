@@ -36,11 +36,14 @@ The fake email/calendar/contacts environment the agent operates through MCP tool
 ### Out-of-band grading
 Scoring that reads the world's backing store and persisted trajectories directly rather than through any agent-reachable tool, so an agent can neither influence the score nor leak the ground truth.
 
+### Memory exam
+The forgetting-aware end-of-run test of whether the agent retained the persona's facts, scored per probe as correct, stale, or missing. Three probe kinds: recall (a planted fact), knowledge-update (a fact that changed mid-run — asserting the *old* value scores stale, which counts as worse than missing), and abstention (declining to invent an event that never happened).
+
 ### Tool starvation
 A run in which the agent executed without its mock-world tools loaded — because the MCP servers lost a startup race against the model load — recognizable by an input-token count far below a tool-loaded run together with zero tool calls; such runs are infrastructure artifacts, not model verdicts. **Resolved** by the persistent MCP gateway; the input-token retry heuristic is kept only as a safety net.
 
 ### Persistent MCP gateway
-The mechanism that prevents tool starvation: the three mock-world servers run as long-lived per-track `streamable-http` servers (a `WorldGateway` starts them once per track and registers them with hermes by URL), so tool discovery is a fast connect-to-a-running-server instead of a per-run subprocess boot the agent can race. Because the servers persist across a track's days while each day is a separate hermes invocation, the per-day simulated clock is delivered via a per-track sidecar file the gateway rewrites, not process env.
+The mechanism that prevents tool starvation: the mock-world servers run as long-lived per-track HTTP servers, started once before a track's days and reached by the agent harness over the network, so tool discovery is a fast connect-to-a-running-server instead of a per-run subprocess boot the agent can race. Because the servers outlive each single-day agent invocation, the simulated per-day clock reaches them out-of-band rather than through process environment.
 
 ## Candidates and hosting
 
