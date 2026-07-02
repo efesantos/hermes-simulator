@@ -353,42 +353,37 @@ _API_FAMILY_NEW: tuple[CandidateModel, ...] = (
         label="Sonnet 5 (OpenRouter)",
         price_per_1m_input=2.00, price_per_1m_output=10.00, family="anthropic",
     ),
-    # --- Run on FREE tiers to spend $0, but priced at the PAID rate so the report
-    # estimates what they WOULD have cost (normalize_cost imputes tokens x these
-    # rates when a $0-metered free run reports no cost). Free tiers are rate-limited,
-    # so they may fail Stage 1 / mid-run — noted in findings if so.
+    # --- Open-weight models that also have a free tier, but run here on their PAID
+    # variant for clean data: their :free tiers HTTP-429'd during the exam's many
+    # rapid calls (producing empty exams), yet the paid rates are still far below the
+    # frontier models — so they belong in the ranking, run properly.
     CandidateModel(
-        id="nvidia/nemotron-3-ultra-550b-a55b:free", hosting_profile=OPENROUTER,
-        context_length=65_536, label="Nemotron 3 Ultra (free; est. paid rate)",
-        price_per_1m_input=0.50, price_per_1m_output=2.20, family="nvidia",
-    ),
-    # North Mini Code has NO paid variant on OpenRouter (free-only), so there is no
-    # rate to estimate from: price stays $0 and the picks logic (cost>0 guard)
-    # excludes it from best-value / cheapest-viable — it appears in the table and
-    # best-accuracy only. Cost shown as $0 / N-A in findings.
-    CandidateModel(
-        id="cohere/north-mini-code:free", hosting_profile=OPENROUTER,
-        context_length=65_536, label="North Mini Code (free; no paid rate)",
-        price_per_1m_input=0.0, price_per_1m_output=0.0, family="cohere",
-    ),
-    # More free-tier candidates (priced at paid rates for the estimate). Free tiers
-    # are heavily rate-limited — gpt-oss-120b and gemma-4-31b returned HTTP 429
-    # ("temporarily unavailable") on a probe 2026-07-02, so they may fail Stage 1 /
-    # mid-run; report as rate-limited/incomplete if so rather than as a real verdict.
-    CandidateModel(
-        id="openai/gpt-oss-120b:free", hosting_profile=OPENROUTER,
-        context_length=65_536, label="GPT-OSS 120B (free; est. paid rate)",
+        id="openai/gpt-oss-120b", hosting_profile=OPENROUTER, context_length=65_536,
+        label="GPT-OSS 120B (OpenRouter)",
         price_per_1m_input=0.03, price_per_1m_output=0.15, family="openai",
     ),
     CandidateModel(
-        id="google/gemma-4-31b-it:free", hosting_profile=OPENROUTER,
-        context_length=65_536, label="Gemma 4 31B (free; est. paid rate)",
+        id="google/gemma-4-31b-it", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Gemma 4 31B (OpenRouter)",
         price_per_1m_input=0.12, price_per_1m_output=0.35, family="google",
     ),
     CandidateModel(
-        id="nvidia/nemotron-3-super-120b-a12b:free", hosting_profile=OPENROUTER,
-        context_length=65_536, label="Nemotron 3 Super 120B (free; est. paid rate)",
+        id="nvidia/nemotron-3-super-120b-a12b", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Nemotron 3 Super 120B (OpenRouter)",
         price_per_1m_input=0.08, price_per_1m_output=0.40, family="nvidia",
+    ),
+    CandidateModel(
+        id="nvidia/nemotron-3-ultra-550b-a55b", hosting_profile=OPENROUTER, context_length=65_536,
+        label="Nemotron 3 Ultra (OpenRouter)",
+        price_per_1m_input=0.50, price_per_1m_output=2.20, family="nvidia",
+    ),
+    # North Mini Code has NO paid variant on OpenRouter (free-only), so it can't be
+    # run clean — its :free tier rate-limits during the exam. Kept for the record;
+    # reported as "free-only, no reliable run" rather than a verdict.
+    CandidateModel(
+        id="cohere/north-mini-code:free", hosting_profile=OPENROUTER, context_length=65_536,
+        label="North Mini Code (free-only)",
+        price_per_1m_input=0.0, price_per_1m_output=0.0, family="cohere",
     ),
 )
 

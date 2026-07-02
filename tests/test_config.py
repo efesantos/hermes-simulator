@@ -23,11 +23,11 @@ _EXPECTED_NEW = {
     "deepseek/deepseek-v3.2",
     "qwen/qwen3.5-flash-02-23",
     "anthropic/claude-sonnet-5",
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openai/gpt-oss-120b",
+    "google/gemma-4-31b-it",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3-ultra-550b-a55b",
     "cohere/north-mini-code:free",
-    "openai/gpt-oss-120b:free",
-    "google/gemma-4-31b-it:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
 }
 
 
