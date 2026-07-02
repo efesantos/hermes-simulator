@@ -146,6 +146,7 @@ class DayRecord:
     session: Optional[SessionRow]
     inbound_count: int
     counterparty_replies: int
+    elapsed_s: float = 0.0  # wall-clock for the agent's run this day (latency source)
     error: str = ""
 
 
@@ -487,6 +488,7 @@ class Runner:
             day=day.day, date=day.date, user_prompt=day.user_prompt,
             exit_code=result.exit_code, stdout=result.stdout, session=session,
             inbound_count=len(day.inbound), counterparty_replies=replies,
+            elapsed_s=result.elapsed_s,
         )
         _write_json(track_dir / f"day_{day.day}.json", record)
         return record

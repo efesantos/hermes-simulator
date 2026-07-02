@@ -21,6 +21,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,6 +103,11 @@ class HarnessResult:
     stdout: str
     stderr: str
     exit_code: int
+    # Wall-clock seconds for the subprocess call. This is the authoritative latency
+    # signal: hermes leaves ``ended_at`` empty in state.db, so per-session durations
+    # can't be derived there — the harness times the run end-to-end instead (which
+    # also captures tool round-trips, the latency a user actually feels).
+    elapsed_s: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -306,6 +312,7 @@ class Harness:
     def _run_once(
         self, prompt: str, extra_env: dict[str, str] | None
     ) -> HarnessResult:
+        _t0 = time.monotonic()
         completed = subprocess.run(
             [self.hermes_bin, "-z", prompt],
             env=self._env(extra_env),
@@ -313,10 +320,12 @@ class Harness:
             text=True,
             timeout=self.timeout,
         )
+        elapsed_s = time.monotonic() - _t0
         result = HarnessResult(
             stdout=completed.stdout,
             stderr=completed.stderr,
             exit_code=completed.returncode,
+            elapsed_s=elapsed_s,
         )
         # Hermes emits the runtime-context refusal on stdout with exit 0, so match
         # either stream regardless of exit. Safe from false positives because the

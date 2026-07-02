@@ -94,7 +94,14 @@ def tokens_to_complete(sessions: list[SessionRow]) -> int:
 
 
 def latency_seconds(sessions: list[SessionRow]) -> float:
-    """Wall-clock summed over sessions, where both timestamps parse (else skipped)."""
+    """Wall-clock summed over sessions, where both timestamps parse (else skipped).
+
+    NOTE: hermes leaves ``ended_at`` empty for oneshot sessions, so this state.db
+    path yields 0.0 in practice. The authoritative latency now comes from the
+    harness's own subprocess wall-clock (``DayRecord.elapsed_s``); see
+    :func:`track_latency_seconds`. This is kept for the rare case ``ended_at`` is
+    populated and as a defensive fallback.
+    """
     total = 0.0
     for s in sessions:
         try:
@@ -102,6 +109,16 @@ def latency_seconds(sessions: list[SessionRow]) -> float:
         except (TypeError, ValueError):
             continue  # ended_at can be empty mid-accounting; count what we can
     return total
+
+
+def track_latency_seconds(day_elapsed: list[float]) -> float:
+    """Track latency = sum of the harness-measured per-day agent runtimes.
+
+    Each value is the wall-clock of one day's ``hermes -z`` subprocess (from
+    ``DayRecord.elapsed_s``). Non-positive entries (a skipped/failed day) are
+    ignored so a partial track isn't rewarded with a spuriously low latency.
+    """
+    return sum(v for v in day_elapsed if v > 0)
 
 
 # --- reliability -------------------------------------------------------------
@@ -191,12 +208,15 @@ def evaluate_track(
     run_config: RunConfig,
     memory_answers: Optional[dict[str, str]] = None,
     judge_mean_0_1: Optional[float] = None,
+    latency_s: float = 0.0,
 ) -> TrackEvaluation:
     """Build a :class:`TrackEvaluation` from a persisted track and its graders.
 
     Capability is the behavioral-adherence score, blended with the judge's
     qualitative mean when supplied. Memory is the exam score (0 if no answers were
-    collected). Cost/tokens/latency come from ``state.db`` sessions.
+    collected). Cost/tokens come from ``state.db`` sessions; ``latency_s`` is the
+    harness-measured track runtime (see :func:`track_latency_seconds`) — pass it in,
+    since it can't be derived from state.db (hermes leaves ``ended_at`` empty).
     """
     capability = grade_track_dir(persona, track_dir).score
     if judge_mean_0_1 is not None:
@@ -211,5 +231,5 @@ def evaluate_track(
         memory=memory,
         tokens=tokens_to_complete(sessions),
         cost_usd=normalize_cost(sessions, model, run_config),
-        latency_s=latency_seconds(sessions),
+        latency_s=latency_s,
     )

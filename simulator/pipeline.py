@@ -19,16 +19,16 @@ from pathlib import Path
 from typing import Optional
 
 from .config import RunConfig
-from .grading.judge import Judge, rubric_for_persona
+from .grading.judge import Judge, JudgeFamilyError, rubric_for_persona
 from .grading.memory_exam import administer_exam
 from .harness import Harness
 from .metrics import (
     TrackEvaluation,
     evaluate_track,
-    latency_seconds,
     normalize_cost,
     rollup,
     tokens_to_complete,
+    track_latency_seconds,
 )
 from .report import Report, build_report, render_table, render_weightings
 from .runner import HarnessFactory, Runner, _default_harness_factory
@@ -95,24 +95,36 @@ def run_full(
                 transcript = "\n\n".join(d.stdout for d in track.days)
                 # Persona-scoped rubric (KTD7): multilingual dimension only where the
                 # persona uses it; monolingual personas keep the default rubric.
-                verdict = judge.score(
-                    transcript, candidate_family=model.family_name,
-                    rubric=rubric_for_persona(persona.name),
-                )
-                judge_mean = verdict.mean / 5.0  # 1..5 -> 0..1
-                # Persist so a disk-rebuilt report (build_report.py) keeps the
-                # judge's capability contribution — needed when a multi-seed field
-                # is run in per-model chunks and stitched back together.
-                (Path(track.trajectory_dir) / "judge.json").write_text(
-                    json.dumps({"judge_mean_0_1": judge_mean,
-                                "scores": verdict.scores,
-                                "rationale": verdict.rationale}, indent=2)
-                )
+                try:
+                    verdict = judge.score(
+                        transcript, candidate_family=model.family_name,
+                        rubric=rubric_for_persona(persona.name),
+                    )
+                    judge_mean = verdict.mean / 5.0  # 1..5 -> 0..1
+                    # Persist so a disk-rebuilt report (build_report.py) keeps the
+                    # judge's capability contribution — needed when a multi-seed field
+                    # is run in per-model chunks and stitched back together.
+                    (Path(track.trajectory_dir) / "judge.json").write_text(
+                        json.dumps({"judge_mean_0_1": judge_mean,
+                                    "scores": verdict.scores,
+                                    "rationale": verdict.rationale}, indent=2)
+                    )
+                except JudgeFamilyError:
+                    # Same-family candidate (e.g. an Anthropic model under the Anthropic
+                    # subscription judge): scoring it would be self-preference-biased and
+                    # the guard forbids it. Fall back to deterministic-only capability
+                    # (judge_mean stays None) rather than zeroing the whole track.
+                    (Path(track.trajectory_dir) / "judge.json").write_text(
+                        json.dumps({"judge_mean_0_1": None,
+                                    "skipped": "same-family as judge (cross-family guard)"},
+                                   indent=2)
+                    )
 
             evaluations.append(evaluate_track(
                 persona, model, track_dir=track.trajectory_dir, sessions=track.sessions,
                 seed=track.seed, completed=completed, run_config=run_config,
                 memory_answers=memory_answers, judge_mean_0_1=judge_mean,
+                latency_s=track_latency_seconds([d.elapsed_s for d in track.days]),
             ))
         except Exception:
             # Degraded: keep the track in the rollup as an incomplete failure
@@ -122,7 +134,7 @@ def run_full(
                 completed=False, capability=0.0, memory=0.0,
                 tokens=tokens_to_complete(track.sessions),
                 cost_usd=normalize_cost(track.sessions, model, run_config),
-                latency_s=latency_seconds(track.sessions),
+                latency_s=track_latency_seconds([d.elapsed_s for d in track.days]),
             ))
 
     eliminated = {o.model_id: o.reason for o in matrix.stage1 if not o.survived}

@@ -24,10 +24,10 @@ from simulator.harness import SessionRow
 from simulator.metrics import (
     TrackEvaluation,
     evaluate_track,
-    latency_seconds,
     normalize_cost,
     rollup,
     tokens_to_complete,
+    track_latency_seconds,
 )
 from simulator.report import render_weightings
 from simulator.scenarios.personas import ALL_PERSONAS
@@ -92,6 +92,9 @@ def main() -> None:
             continue
         sessions = [_session_from_dict(d["session"]) for d in track.get("days", [])
                     if d.get("session")]
+        track_latency = track_latency_seconds(
+            [float(d.get("elapsed_s", 0.0)) for d in track.get("days", [])]
+        )
         answers_path = track_dir / "memory_exam.json"
         answers = json.loads(answers_path.read_text()) if answers_path.exists() else None
         judge_path = track_dir / "judge.json"
@@ -107,6 +110,7 @@ def main() -> None:
                 sessions=sessions, seed=track["seed"],
                 completed=(track["status"] == "completed"), run_config=cfg,
                 memory_answers=answers, judge_mean_0_1=judge_mean,
+                latency_s=track_latency,
             ))
         except Exception as exc:  # noqa: BLE001 - report robustness over strictness
             print(f"warning: track {track_dir} failed grading ({exc}); "
@@ -116,7 +120,7 @@ def main() -> None:
                 completed=False, capability=0.0, memory=0.0,
                 tokens=tokens_to_complete(sessions),
                 cost_usd=normalize_cost(sessions, model, cfg),
-                latency_s=latency_seconds(sessions),
+                latency_s=track_latency,
             ))
 
     rollups = rollup(evaluations, cfg, eliminated=eliminated)

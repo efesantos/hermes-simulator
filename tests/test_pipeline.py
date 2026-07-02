@@ -110,3 +110,40 @@ def test_family_name_inference():
     assert _model("qwen3.6:latest").family_name == "qwen"
     assert _model("gemma3:12b").family_name == "gemma"
     assert CandidateModel("llama-3.3-70b", LOCAL_OLLAMA, 128_000, family="meta").family_name == "meta"
+
+
+def test_same_family_candidate_falls_back_to_deterministic_capability(tmp_path, fake_hermes, monkeypatch):
+    # A candidate sharing the judge's family (e.g. an Anthropic model under the
+    # Anthropic subscription judge) must NOT be zeroed by the cross-family guard —
+    # it should be scored deterministic-only (judge_mean skipped), not degraded.
+    import json
+    from simulator.grading.judge import Judge, JudgeConfig
+
+    monkeypatch.setenv("FAKE_STDOUT", "ok")
+    # Candidate family "anthropic" == the judge's family below.
+    anthropic_model = CandidateModel(
+        id="anthropic/claude-sonnet-5", hosting_profile=LOCAL_OLLAMA,
+        context_length=65_536, family="anthropic",
+    )
+    cfg = RunConfig(candidates=(anthropic_model,), seeds=(0,), k=1)
+    factory = lambda home, model: Harness(home, model, hermes_bin=fake_hermes, timeout=60)
+    judge = Judge(  # same family as the candidate -> score() would raise JudgeFamilyError
+        JudgeConfig(model="j", family="anthropic", base_url="http://x/v1"),
+        chat_fn=lambda *a, **k: json.dumps({"scores": {"tone": 5}, "rationale": "x"}),
+    )
+
+    report, _ = run_full(
+        cfg, [DANA], stage1_tasks=[], results_root=tmp_path,
+        harness_factory=factory, judge=judge, run_id="samefam",
+    )
+
+    # The model is present and NOT crashed into a 0-everything degraded row.
+    assert report.ranked, "same-family candidate should still be ranked, not dropped"
+    row = report.ranked[0]
+    assert row.model_id == "anthropic/claude-sonnet-5"
+    # judge.json records the skip reason; judge_mean is None (deterministic-only).
+    jf = list((tmp_path / "samefam" / "stage2").glob("*/*/seed*/judge.json"))
+    assert jf, "judge.json should still be written for the skipped-judge track"
+    payload = json.loads(jf[0].read_text())
+    assert payload["judge_mean_0_1"] is None
+    assert "same-family" in payload.get("skipped", "")
