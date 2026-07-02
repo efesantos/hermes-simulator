@@ -74,9 +74,14 @@ The field of candidate models (local and API) running validly at the 64K context
 floor, with real cost-per-hosting profiles. The **API field over OpenRouter is
 operational** (GLM-5.2, Llama-3.3, Qwen2.5-72B, Mistral-Large), with a
 tool-support guard that drops models whose providers can't do agentic tool use.
-Current leader (definitive 5-seed run): **Mistral-Large** (best memory at perfect
-reliability; the only model to adopt the *second* mid-run knowledge update) — the
-3-seed GLM-5.2 lead did not reproduce. See `docs/benchmark-findings-2026-06-30.md`.
+Current leader (definitive 15-model, 5-seed run on the multilingual `amsterdam`
+persona, 2026-07-02): **Qwen 3.7 Plus** — the user's own model — is #1 on both
+weightings (best capability+memory, perfect reliability, cheap at $0.045/task).
+Next: GLM-5.2, then **Nemotron 3 Super 120B** (a standout cheap open-weight model).
+The frontier models (Gemini, Sonnet 5) cost 20–30× more and ranked lower. Best
+cheaper-alternative pick: **Qwen 3.5 Flash**. See
+`docs/benchmark-findings-2026-07-02.md`. (The prior Mistral-Large lead was on the
+older synthetic `dana` persona; `docs/benchmark-findings-2026-06-30.md`.)
 
 _Why it serves the approach:_ makes "true cost" real and spans the deployment options
 actually worth choosing between.
