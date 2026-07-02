@@ -23,6 +23,8 @@ _EXPECTED_NEW = {
     "deepseek/deepseek-v3.2",
     "qwen/qwen3.5-flash-02-23",
     "anthropic/claude-sonnet-5",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "cohere/north-mini-code:free",
 }
 
 
@@ -38,8 +40,12 @@ def test_api_family_field_selectable_and_complete():
 def test_api_family_candidates_are_api_priced_and_eligible():
     for c in API_FAMILY_CANDIDATES:
         assert c.hosting == Hosting.API, c.id
-        assert c.price_per_1m_input > 0 and c.price_per_1m_output > 0, c.id
         assert c.meets_context_floor, c.id
+        # Paid models carry a real price; free-tier ":free" entries may be $0 (they
+        # spend no credit — either priced at their paid rate for estimation, or $0
+        # when no paid rate exists). Only paid ids must have non-zero prices.
+        if not c.id.endswith(":free"):
+            assert c.price_per_1m_input > 0 and c.price_per_1m_output > 0, c.id
 
 
 def test_api_family_families_are_explicit_and_correct():

@@ -353,6 +353,24 @@ _API_FAMILY_NEW: tuple[CandidateModel, ...] = (
         label="Sonnet 5 (OpenRouter)",
         price_per_1m_input=2.00, price_per_1m_output=10.00, family="anthropic",
     ),
+    # --- Run on FREE tiers to spend $0, but priced at the PAID rate so the report
+    # estimates what they WOULD have cost (normalize_cost imputes tokens x these
+    # rates when a $0-metered free run reports no cost). Free tiers are rate-limited,
+    # so they may fail Stage 1 / mid-run — noted in findings if so.
+    CandidateModel(
+        id="nvidia/nemotron-3-ultra-550b-a55b:free", hosting_profile=OPENROUTER,
+        context_length=65_536, label="Nemotron 3 Ultra (free; est. paid rate)",
+        price_per_1m_input=0.50, price_per_1m_output=2.20, family="nvidia",
+    ),
+    # North Mini Code has NO paid variant on OpenRouter (free-only), so there is no
+    # rate to estimate from: price stays $0 and the picks logic (cost>0 guard)
+    # excludes it from best-value / cheapest-viable — it appears in the table and
+    # best-accuracy only. Cost shown as $0 / N-A in findings.
+    CandidateModel(
+        id="cohere/north-mini-code:free", hosting_profile=OPENROUTER,
+        context_length=65_536, label="North Mini Code (free; no paid rate)",
+        price_per_1m_input=0.0, price_per_1m_output=0.0, family="cohere",
+    ),
 )
 
 # The full field: the seven new candidates plus the four continuity models.
