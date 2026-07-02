@@ -21,7 +21,6 @@ _EXPECTED_NEW = {
     "openai/gpt-5.4-mini",
     "google/gemini-3.5-flash",
     "deepseek/deepseek-v3.2",
-    "minimax/minimax-m2.5",
     "qwen/qwen3.5-flash-02-23",
     "anthropic/claude-sonnet-5",
 }
@@ -46,7 +45,7 @@ def test_api_family_candidates_are_api_priced_and_eligible():
 def test_api_family_families_are_explicit_and_correct():
     fam = {c.id: c.family_name for c in API_FAMILY_CANDIDATES}
     assert fam["deepseek/deepseek-v3.2"] == "deepseek"
-    assert fam["minimax/minimax-m2.5"] == "minimax"
+    assert fam["anthropic/claude-sonnet-5"] == "anthropic"
     assert fam["google/gemini-3.5-flash"] == "google"
     assert fam["openai/gpt-5.4-mini"] == "openai"
 

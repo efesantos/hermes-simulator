@@ -335,12 +335,8 @@ _API_FAMILY_NEW: tuple[CandidateModel, ...] = (
         label="DeepSeek V3.2 (OpenRouter)",
         price_per_1m_input=0.229, price_per_1m_output=0.343, family="deepseek",
     ),
-    # Cheap agentic model.
-    CandidateModel(
-        id="minimax/minimax-m2.5", hosting_profile=OPENROUTER, context_length=65_536,
-        label="MiniMax M2.5 (OpenRouter)",
-        price_per_1m_input=0.12, price_per_1m_output=0.48, family="minimax",
-    ),
+    # (MiniMax M2.5 was dropped: as a reasoning model on the Chutes provider its
+    # calls hung 20min–1h44m before timing out, making the run impractically slow.)
     # Cheapest-input serious Qwen — likely the cost-per-task winner on an
     # input-dominated workload.
     CandidateModel(
