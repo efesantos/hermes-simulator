@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hermes-simulator — Evaluation Methodology</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --ink:#e7e9ee; --muted:#9aa3b2;
+    --line:#2a2f3a; --accent:#6c8cff; --good:#4bd18b; --warn:#ffb454; --bad:#ff6b6b;
+    --cap:#6c8cff; --mem:#b58bff; --rel:#4bd18b; --spd:#42c9d6; --cost:#ffb454;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:32px}
+  h1{font-size:30px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:16px;margin:0}
+  h2{font-size:22px;margin:44px 0 12px;padding-top:8px}
+  h3{font-size:17px;margin:22px 0 8px}
+  p{margin:10px 0}
+  code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace;color:#cfe0ff}
+  .muted{color:var(--muted)}
+  .lead{font-size:18px;color:#cdd3de}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .funnel{display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin:18px 0}
+  .stage{flex:1;min-width:260px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .stage .tag{display:inline-block;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--accent);border-radius:20px;padding:1px 10px;margin-bottom:8px}
+  .arrow{align-self:center;color:var(--muted);font-size:24px}
+  .dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin:18px 0}
+  .dim{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;border-top:3px solid var(--line)}
+  .dim.cap{border-top-color:var(--cap)} .dim.mem{border-top-color:var(--mem)}
+  .dim.rel{border-top-color:var(--rel)} .dim.spd{border-top-color:var(--spd)} .dim.cost{border-top-color:var(--cost)}
+  .dim h3{margin-top:0}
+  .dim .how{color:var(--muted);font-size:14px}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.03em}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:20px;border:1px solid var(--line)}
+  .k-recall{color:var(--cap);border-color:var(--cap)}
+  .k-update{color:var(--mem);border-color:var(--mem)}
+  .k-abstain{color:var(--warn);border-color:var(--warn)}
+  ul.tight{margin:8px 0;padding-left:22px} ul.tight li{margin:4px 0}
+  .callout{border-left:3px solid var(--accent);background:var(--panel2);border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  .day{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .day b{color:#cfe0ff}
+  footer{margin-top:48px;border-top:1px solid var(--line);padding-top:18px;color:var(--muted);font-size:14px}
+  .legend span{display:inline-block;margin-right:14px;font-size:13px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>How the models are evaluated</h1>
+  <p class="sub">hermes-simulator — the benchmark that ranks candidate models running inside the Nous <code>hermes-agent</code> CLI for a personal-assistant business.</p>
+</header>
+
+<p class="lead">Each model is dropped into the <em>same fixed Hermes harness</em> and made to run a simulated person's life for several days — booking appointments, triaging email, remembering preferences, coordinating with family. It is then scored on five dimensions and ranked. Nothing is measured by asking the model about itself; a separate grader reads the world's state directly.</p>
+
+<div class="callout">
+  <b>The question this answers:</b> for a real personal-assistant workload, which open-weight model gives the best mix of <b>accuracy, reliability, speed, and cost</b> — not in the abstract, but on tasks shaped like the user's actual usage.
+</div>
+
+<h2>The shape: a two-stage funnel</h2>
+<p>A cheap pre-filter eliminates non-viable models before the expensive multi-day simulation runs only on the survivors.</p>
+<div class="funnel">
+  <div class="stage">
+    <span class="tag">Stage 1 — Pre-filter</span>
+    <p style="margin:6px 0"><b>Cheap eligibility + capability gate.</b> Single-shot tasks, memory off. Drops a model before any expensive run if it:</p>
+    <ul class="tight">
+      <li>can't meet the <b>64,000-token</b> context floor, or</li>
+      <li>fails the <b>tool-call format smoke</b> (doesn't emit a usable tool call), or</li>
+      <li>passes fewer than <b>60%</b> of 10 cross-domain tasks.</li>
+    </ul>
+  </div>
+  <div class="arrow">→</div>
+  <div class="stage">
+    <span class="tag">Stage 2 — Persona simulation</span>
+    <p style="margin:6px 0"><b>The real test.</b> Survivors run a multi-day, <b>memory-on</b> persona — a synthetic person whose week is authored to exercise memory, not just task completion. Graded on all five dimensions.</p>
+  </div>
+</div>
+
+<h2>Stage 1 — the 10 pre-filter tasks</h2>
+<p>Each is a single-shot instruction against a seeded mock world; success is decided by comparing the resulting world state to a known-correct end state.</p>
+<table>
+  <tr><th>Category</th><th>What it checks</th></tr>
+  <tr><td><b>Booking</b> ×2</td><td>Create a calendar event honoring a stated constraint (e.g. "never before 9am").</td></tr>
+  <tr><td><b>Conflict</b> ×2</td><td>Detect and avoid a double-booking; flag a clash to the spouse instead of silently overwriting.</td></tr>
+  <tr><td><b>Cross-domain</b> ×2</td><td>Read an appointment confirmation from the <em>inbox</em> and turn it into a <em>calendar</em> event (email→calendar).</td></tr>
+  <tr><td><b>Coordination</b> ×2</td><td>Look up a contact then email them; forward a school notice and ask a question.</td></tr>
+  <tr><td><b>Calendar</b> ×1</td><td>Reschedule an existing meeting to a new time.</td></tr>
+  <tr><td><b>Abstention</b> ×1</td><td>Asked about an appointment that doesn't exist — must <em>not</em> invent one.</td></tr>
+</table>
+
+<h2>Stage 2 — the persona: <span class="muted">"amsterdam"</span></h2>
+<p>A PII-scrubbed, multilingual (English / Dutch / Portuguese) Amsterdam-family assistant, modelled on the shape of the user's real Hermes usage — family calendar, email triage, and a daily briefing over <b>6 simulated days</b>. The same fixed stream of events hits every model identically, so differences reflect the model, not the world.</p>
+<div class="grid2">
+  <div class="day"><b>Day 1</b> — States two standing rules (reply in English; never book before 9am) and a recurring fact (kids' swim is Saturdays). Asks for a dental cleaning to be booked.</div>
+  <div class="day"><b>Day 2</b> — A <b>Dutch</b> school email announces a closure. The agent must translate it and surface the action item in English.</div>
+  <div class="day"><b>Day 3</b> — The swim school emails that class <b>moves from Saturday to Sunday</b>. A model with real memory adopts the change.</div>
+  <div class="day"><b>Day 4</b> — A meeting is proposed for 8:00am — should trip the "never before 9am" rule.</div>
+  <div class="day"><b>Day 5</b> — A request written in <b>Portuguese</b> asks for the kids' activities next week (tests comprehension + the swim update).</div>
+  <div class="day"><b>Day 6</b> — Set up this week's reminders for the recurring family routines.</div>
+</div>
+
+<h2>The five scored dimensions</h2>
+<div class="legend">
+  <span><span class="dot" style="background:var(--cap)"></span>Capability</span>
+  <span><span class="dot" style="background:var(--mem)"></span>Memory</span>
+  <span><span class="dot" style="background:var(--rel)"></span>Reliability</span>
+  <span><span class="dot" style="background:var(--spd)"></span>Speed</span>
+  <span><span class="dot" style="background:var(--cost)"></span>Cost</span>
+</div>
+<div class="dims">
+  <div class="dim cap">
+    <h3>Capability</h3>
+    <p>Did it do the tasks well? A <b>deterministic behavioral score</b> (did the right events land in the world, were constraints honored) blended with an <b>LLM-judge</b>'s qualitative rating.</p>
+    <p class="how">0–1. Judge scores tone, proactivity, memory-surfacing, and — for this persona — multilingual handling.</p>
+  </div>
+  <div class="dim mem">
+    <h3>Memory</h3>
+    <p>An end-of-run <b>exam</b> that asks the agent to recall what it should know, scored <b>forgetting-aware</b> (see below). This is the dimension that most separates real memory from lucky pattern-matching.</p>
+    <p class="how">0–1 across recall / knowledge-update / abstention probes.</p>
+  </div>
+  <div class="dim rel">
+    <h3>Reliability</h3>
+    <p>Does it succeed <em>consistently</em>? Each track is repeated across <b>5 random seeds</b>; reliability is <code>pass^k</code> (k=5) — the probability all repeats succeed. One flaky run tanks it.</p>
+    <p class="how">0–1. A task "succeeds" when it completes with capability ≥ 0.5.</p>
+  </div>
+  <div class="dim spd">
+    <h3>Speed</h3>
+    <p>How long the agent takes end-to-end. Measured as the <b>wall-clock</b> of each day's run (including tool round-trips — the latency a user actually feels), summed per track.</p>
+    <p class="how">Seconds; min-max inverted so the fastest scores 1.0.</p>
+  </div>
+  <div class="dim cost">
+    <h3>Cost</h3>
+    <p><b>Cost per completed task</b> = tokens-to-complete × the model's live price, read from what Hermes metered. Captures the fact that a "cheap" verbose model can cost more per task than a pricier terse one.</p>
+    <p class="how">Dollars; min-max inverted so the cheapest scores 1.0.</p>
+  </div>
+</div>
+
+<h2>The memory exam — three probe kinds</h2>
+<p>Administered at the end of the run against the agent's accrued memory. Scoring is <b>forgetting-aware</b>: confidently asserting a stale fact is scored worse than admitting you don't know.</p>
+<table>
+  <tr><th>Kind</th><th>What it tests</th><th>In the amsterdam persona</th></tr>
+  <tr>
+    <td><span class="pill k-recall">recall</span></td>
+    <td>A planted fact the agent should remember.</td>
+    <td>The "reply in English" default; the "no appointments before 9am" rule; the content of the Dutch school email (comprehension).</td>
+  </tr>
+  <tr>
+    <td><span class="pill k-update">knowledge-update</span></td>
+    <td>A fact that <em>changed</em> mid-run. Asserting the <b>old</b> value scores <b>stale</b> (wrong), not merely missing.</td>
+    <td>Swim class moved Saturday → Sunday on day 3. The right answer is "Sunday."</td>
+  </tr>
+  <tr>
+    <td><span class="pill k-abstain">abstention</span></td>
+    <td>An event that never happened. The agent must decline rather than fabricate.</td>
+    <td>A kid's "orthodontist appointment" that was never scheduled — must not be invented.</td>
+  </tr>
+</table>
+
+<h3>Behavioral signals (over the whole run)</h3>
+<p>Beyond the exam, the trajectory is checked for adherence:</p>
+<ul class="tight">
+  <li><b>No pre-9am bookings</b> after the rule is stated (a standing preference honored on every later action).</li>
+  <li><b>Stops treating swim as Saturday</b> after day 3 — evidence the correction was actually applied, not just acknowledged.</li>
+</ul>
+
+<h2>The judge</h2>
+<p>The fuzzy, qualitative part of capability is scored by a frontier model (the Claude Code subscription) with the standard bias mitigations:</p>
+<ul class="tight">
+  <li><b>Cross-family enforced</b> — a model is never judged by one of its own family (self-preference bias). <span class="muted">A same-family candidate is instead scored on the deterministic behavioral component only.</span></li>
+  <li><b>Rubric-anchored</b> — every dimension is scored 1–5 against explicit anchors, not a bare "rate this."</li>
+  <li><b>Persona-scoped</b> — the <code>multilingual</code> rubric dimension is applied only to this multilingual persona, so other personas' baselines are unaffected.</li>
+</ul>
+
+<h2>Scoring &amp; the output</h2>
+<p>The five dimensions roll into a weighted composite — but the report deliberately crowns <b>no single winner</b>. Instead it shows the full per-dimension table under <b>two weightings</b>, plus <b>three labelled picks</b>, so the accuracy-vs-cost trade-off is the reader's to make.</p>
+<div class="grid2">
+  <div class="panel">
+    <h3 style="margin-top:0">Two weightings</h3>
+    <table>
+      <tr><th>Weighting</th><th>Cap / Mem / Rel / Cost / Speed</th></tr>
+      <tr><td><b>memory_heavy</b><br><span class="muted">the default</span></td><td>0.35 / 0.35 / 0.20 / 0.10 / 0.00</td></tr>
+      <tr><td><b>cost_forward</b></td><td>0.25 / 0.20 / 0.15 / 0.25 / 0.15</td></tr>
+    </table>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">Three labelled picks</h3>
+    <ul class="tight">
+      <li><b>Best accuracy</b> — highest capability + memory (floor ignored).</li>
+      <li><b>Best value</b> — best accuracy-per-dollar among models clearing the floor.</li>
+      <li><b>Cheapest viable</b> — lowest cost-per-task among models clearing the floor.</li>
+    </ul>
+    <p class="muted" style="font-size:13px;margin-bottom:0">Viability floor: capability ≥ 0.60, memory ≥ 0.50, reliability ≥ 0.75.</p>
+  </div>
+</div>
+
+<h2>Why the results can be trusted</h2>
+<div class="panel">
+  <ul class="tight">
+    <li><b>Out-of-band grading</b> — the grader reads the mock world's backing store and the saved trajectories directly, <em>never</em> through a tool the agent can reach. An agent can neither influence its score nor see the answer key.</li>
+    <li><b>Fixed harness &amp; event stream</b> — every model runs the identical Hermes CLI against the identical timed sequence of events, so variance reflects the model, not the environment.</li>
+    <li><b>≥5 seeds</b> — a 3-seed run once crowned a false leader; reproducibility across 5 seeds is required before trusting a winner.</li>
+    <li><b>Persistent mock-world gateway</b> — the calendar/email/contacts servers run as long-lived per-track HTTP servers so tool discovery never races the model's first turn (which would otherwise produce tool-less "failures" that are really infrastructure artifacts).</li>
+  </ul>
+</div>
+
+<h2>The current model field</h2>
+<p>16 models are under test, reached over OpenRouter — a mix the user's real workload and question call for:</p>
+<ul class="tight">
+  <li><b>The user's own model:</b> Qwen 3.7 Plus (never previously benchmarked).</li>
+  <li><b>Cheaper / faster peers:</b> Qwen-Plus, Qwen 3.5 Flash, DeepSeek V3.2, GPT-5.4-mini, Gemini 3.5 Flash.</li>
+  <li><b>Continuity (prior field):</b> GLM-5.2, Mistral-Large, Llama-3.3 70B, Qwen2.5 72B.</li>
+  <li><b>Frontier reference:</b> Sonnet 5.</li>
+  <li><b>Free-tier (run at $0, cost estimated at paid rates):</b> Nemotron 3 Ultra, Nemotron 3 Super, Cohere North Mini Code, GPT-OSS 120B, Gemma 4 31B.</li>
+</ul>
+<p class="muted" style="font-size:14px">MiniMax M2.5 was dropped mid-run: as a reasoning model on a saturated provider its calls hung for up to ~1h44m. Free tiers are rate-limited and may not complete; any that can't are reported as "rate-limited," not as a capability verdict.</p>
+
+<footer>
+  <p><b>Run it:</b> <code>python -m simulator --candidates api-family --model &lt;id&gt; --seeds 5 --persona amsterdam --run-id &lt;run&gt;</code> per model, then <code>scripts/build_report.py &lt;run&gt;</code> stitches the ranked table + picks. A <code>--candidates api-free --seeds 1</code> smoke validates the pipeline at $0 first.</p>
+  <p>Source of truth: <code>simulator/</code> (harness, runner, metrics, report, grading), <code>simulator/scenarios/personas/amsterdam.py</code> (the persona), <code>CONCEPTS.md</code> (vocabulary). This page describes the methodology as implemented on 2026-07-02.</p>
+</footer>
+
+</div>
+</body>
+</html>
